@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
-
-## Getting Started
-
-First, run the development server:
-
+# 🪶 Corvian
+**AI-тьютор для учеников 6–12 классов НИШ, КТЛ, РФМШ**
+Два ворона. Один результат.
+---
+## Что это
+Corvian — платформа AI-тьюторинга, использующая двух персонажей-воронов для обучения через сократический метод:
+- **Хугин** (мысль) — объясняет теорию через диалог, задаёт наводящие вопросы
+- **Мунин** (память) — тренирует на задачах, подталкивает к решению
+Учителя калибруют AI: загружают теорию, задачи, навыки и инструкции — и вороны учат именно так, как считает нужным учитель. Дашборд показывает пробелы каждого ученика.
+## Стек
+| Слой | Технология |
+|------|-----------|
+| Frontend | Next.js 14+ (App Router), React, TypeScript |
+| Стилизация | Tailwind CSS + shadcn/ui (Radix) |
+| База данных | Supabase (PostgreSQL + Auth + Realtime) |
+| AI | Anthropic Claude API (Haiku для чата, Sonnet для анализа) |
+| Математика | KaTeX |
+| Деплой | Vercel |
+| PWA | next-pwa или Serwist |
+## Быстрый старт
 ```bash
+# 1. Клонировать
+git clone https://github.com/your-org/corvian.git
+cd corvian
+# 2. Установить зависимости
+npm install
+# 3. Скопировать .env
+cp .env.example .env.local
+# Заполнить: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY
+# 4. Применить миграции Supabase
+npx supabase db push
+# 5. Запустить
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Открыть http://localhost:3000
+## Переменные окружения
+```env
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+ANTHROPIC_API_KEY=
+TEACHER_INVITE_CODE=PROJECTCORVINUS
+```
+## Пользовательские потоки
+### Ученик
+1. Заходит на `/` → нажимает «Я ученик»
+2. Вводит код класса (формат KRS-XXX) → вводит никнейм
+3. Попадает в дашборд: видит темы, выбирает → чат с Хугином → чат с Мунином → итог
+4. Без регистрации, идентификация через localStorage
+### Учитель
+1. Заходит на `/` → нажимает «Я учитель»
+2. Регистрация: ФИО, школа, предмет, email, пароль + код приглашения `PROJECTCORVINUS`
+3. Создаёт класс → получает код → калибрует темы (теория, навыки, цели, задачи, инструкции)
+4. Видит дашборд: обзор, интервенции, заблуждения, AI-инсайты
+## Структура
+Смотри `CLAUDE.md` для полной структуры файлов, схемы БД и спецификаций.
+Смотри `DESIGN.md` для палитры, типографики и компонентных правил.
+## Лицензия
+Proprietary. Все права защищены.
