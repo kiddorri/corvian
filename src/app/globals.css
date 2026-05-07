@@ -32,3 +32,26 @@ body {
   background-color: rgba(139, 92, 246, 0.3);
   color: #F4F4F5;
 }
+
+:root {
+  --radius: 0.625rem;
+  --background: #09070F;
+  --foreground: #F4F4F5;
+  --card: #0F0D17;
+  --card-foreground: #F4F4F5;
+  --popover: #181525;
+  --popover-foreground: #F4F4F5;
+  --primary: #8B5CF6;
+  --primary-foreground: #FFFFFF;
+  --secondary: #141220;
+  --secondary-foreground: #F4F4F5;
+  --muted: #0F0D17;
+  --muted-foreground: #71717A;
+  --accent: #141220;
+  --accent-foreground: #F4F4F5;
+  --destructive: #EF4444;
+  --destructive-foreground: #FFFFFF;
+  --border: rgba(139, 92, 246, 0.08);
+  --input: rgba(139, 92, 246, 0.08);
+  --ring: #8B5CF6;
+}
