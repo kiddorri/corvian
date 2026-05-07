@@ -163,7 +163,7 @@ export default function TeacherLayout({
             onClick={() => setMobileOpen(false)}
             aria-hidden="true"
           />
-          <aside className="animate-fade-in fixed left-0 top-0 z-50 h-full w-[260px] border-r border-[rgba(139,92,246,0.08)] bg-[#0F0D17] lg:hidden">
+          <aside className="animate-slide-in-left fixed left-0 top-0 z-50 h-full w-[260px] border-r border-[rgba(139,92,246,0.08)] bg-[#0F0D17] lg:hidden">
             <button
               type="button"
               onClick={() => setMobileOpen(false)}

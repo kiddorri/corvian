@@ -63,3 +63,11 @@ body {
 .animate-fade-in {
   animation: fadeIn 0.6s ease forwards;
 }
+
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+.animate-slide-in-left {
+  animation: slideInLeft 0.2s ease forwards;
+}
