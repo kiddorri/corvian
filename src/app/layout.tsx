@@ -1,24 +1,15 @@
 import type { Metadata } from "next";
-import { DM_Sans, Space_Mono } from "next/font/google";
 import "./globals.css";
-
-const dmSans = DM_Sans({
-  subsets: ["latin", "cyrillic"],
-  variable: "--font-dm-sans",
-  display: "swap",
-});
-
-const spaceMono = Space_Mono({
-  weight: ["400", "700"],
-  subsets: ["latin"],
-  variable: "--font-space-mono",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "Corvian — AI-тьютор",
   description: "Два ворона. Один результат.",
 };
+
+const fontVars = {
+  "--font-dm-sans": "'DM Sans'",
+  "--font-space-mono": "'Space Mono'",
+} as React.CSSProperties;
 
 export default function RootLayout({
   children,
@@ -26,7 +17,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="ru" className={`${dmSans.variable} ${spaceMono.variable}`}>
+    <html lang="ru" style={fontVars}>
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+          rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossOrigin=""
+        />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap"
+        />
+      </head>
       <body>{children}</body>
     </html>
   );
