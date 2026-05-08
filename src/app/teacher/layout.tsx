@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   BookOpen,
@@ -123,6 +123,39 @@ export default function TeacherLayout({
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const supabase = createClient();
+
+    (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        router.push("/register");
+        return;
+      }
+
+      const { data: teacher } = await supabase
+        .from("teachers")
+        .select("id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (cancelled) return;
+      if (!teacher) {
+        router.push("/register");
+        return;
+      }
+      setIsCheckingAuth(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   async function handleSignOut() {
     if (signingOut) return;
@@ -130,6 +163,17 @@ export default function TeacherLayout({
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/");
+  }
+
+  if (isCheckingAuth) {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center"
+        style={{ background: "#09070F" }}
+      >
+        <div className="text-sm text-[#A1A1AA]">Загрузка...</div>
+      </div>
+    );
   }
 
   return (

@@ -43,6 +43,16 @@ export default function Home() {
             Я учитель
           </Link>
         </div>
+
+        <p className="mt-4 text-sm text-[#71717A]">
+          Уже есть аккаунт учителя?{" "}
+          <Link
+            href="/login"
+            className="text-[#A1A1AA] transition-colors hover:text-[#F4F4F5]"
+          >
+            Войти
+          </Link>
+        </p>
       </div>
     </main>
   );
