@@ -693,59 +693,122 @@ export default function ChatPage() {
   }
 
   const sidebarContent = (
-    <div className="flex h-full flex-col gap-1 overflow-y-auto p-4">
-      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[#71717A]">
-        {topic?.name ?? "Тема"}
-      </h3>
-      <p className="mb-3 text-xs text-[#52525B]">{topic?.section ?? ""}</p>
+    <div className="flex h-full flex-col">
+      {/* Шапка сайдбара */}
+      <div className="border-b border-[rgba(139,92,246,0.08)] p-5">
+        <h2 className="text-lg font-bold text-[#F4F4F5]">{topic?.name ?? "Тема"}</h2>
+        <p className="mt-1 text-sm text-[#71717A]">{topic?.section ?? ""}</p>
 
-      {goals.length > 0 && (
-        <div className="mb-4">
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#71717A]">
-            Цели
-          </h4>
-          <div className="flex flex-col gap-1.5">
-            {goals.map((goal) => (
-              <div
-                key={goal.id}
-                className="flex items-start gap-2 rounded-lg border border-[rgba(139,92,246,0.08)] bg-[#09070F] px-3 py-2"
-              >
-                <span className="mt-0.5 text-xs text-[#52525B]">○</span>
-                <span className="text-sm text-[#A1A1AA]">{goal.text}</span>
-              </div>
-            ))}
+        {/* Прогресс-бар */}
+        <div className="mt-4">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs font-medium text-[#A1A1AA]">Прогресс</span>
+            <span className="font-mono text-xs font-bold text-[#8B5CF6]">
+              0/{goals.length + skills.length}
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#181525]">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] transition-all duration-500"
+              style={{ width: "0%" }}
+            />
           </div>
         </div>
-      )}
+      </div>
 
-      {skills.length > 0 && (
-        <div className="mb-4">
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#71717A]">
-            Навыки
-          </h4>
-          <div className="flex flex-col gap-1.5">
-            {skills.map((skill) => (
-              <div
-                key={skill.id}
-                className="flex items-start gap-2 rounded-lg border border-[rgba(139,92,246,0.08)] bg-[#09070F] px-3 py-2"
-              >
-                <span className="mt-0.5 text-xs text-[#A1A1AA]">●</span>
-                <div className="flex flex-1 flex-col">
-                  <span className="text-sm text-[#F4F4F5]">{skill.text}</span>
-                  <span className="text-xs text-[#52525B]">{skill.level}</span>
+      {/* Timeline с шагами */}
+      <div className="flex-1 overflow-y-auto p-5">
+        <div className="relative flex flex-col">
+
+          {/* Цели обучения */}
+          {goals.length > 0 && (
+            <>
+              <div className="mb-3">
+                <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#52525B]">
+                  Цели обучения
+                </span>
+              </div>
+              {goals.map((goal, i) => (
+                <div key={goal.id} className="relative flex gap-3 pb-4">
+                  {/* Вертикальная линия */}
+                  {(i < goals.length - 1 || skills.length > 0) && (
+                    <div className="absolute left-[11px] top-7 bottom-0 w-[2px] bg-[#181525]" />
+                  )}
+                  {/* Индикатор */}
+                  <div className="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 border-[#52525B] bg-[#09070F]">
+                    <div className="h-1.5 w-1.5 rounded-full bg-[#52525B]" />
+                  </div>
+                  {/* Контент */}
+                  <div className="flex-1 rounded-xl border border-[rgba(139,92,246,0.08)] bg-[#09070F] px-3.5 py-3">
+                    <p className="text-sm leading-snug text-[#A1A1AA]">{goal.text}</p>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Разделитель между целями и навыками */}
+          {goals.length > 0 && skills.length > 0 && (
+            <div className="relative mb-3 mt-1 flex items-center gap-3">
+              <div className="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center">
+                <div className="h-[2px] w-3 bg-[#52525B]" />
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#52525B]">
+                Навыки для освоения
+              </span>
+            </div>
+          )}
+
+          {/* Навыки */}
+          {skills.length > 0 && goals.length === 0 && (
+            <div className="mb-3">
+              <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#52525B]">
+                Навыки для освоения
+              </span>
+            </div>
+          )}
+          {skills.map((skill, i) => {
+            const levelColor = skill.level === "продвинутый"
+              ? "#8B5CF6"
+              : skill.level === "олимпиадный"
+              ? "#F59E0B"
+              : "#3B82F6";
+            return (
+              <div key={skill.id} className="relative flex gap-3 pb-4">
+                {/* Вертикальная линия */}
+                {i < skills.length - 1 && (
+                  <div className="absolute left-[11px] top-7 bottom-0 w-[2px] bg-[#181525]" />
+                )}
+                {/* Индикатор с цветом уровня */}
+                <div
+                  className="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 bg-[#09070F]"
+                  style={{ borderColor: levelColor }}
+                >
+                  <div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: levelColor }} />
+                </div>
+                {/* Контент */}
+                <div className="flex-1 rounded-xl border border-[rgba(139,92,246,0.08)] bg-[#09070F] px-3.5 py-3">
+                  <p className="text-sm font-medium leading-snug text-[#F4F4F5]">{skill.text}</p>
+                  <span
+                    className="mt-1 inline-block rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                    style={{
+                      color: levelColor,
+                      backgroundColor: `${levelColor}15`,
+                    }}
+                  >
+                    {skill.level}
+                  </span>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+            );
+          })}
 
-      <div className="mt-auto border-t border-[rgba(139,92,246,0.08)] pt-3">
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-[#71717A]">Прогресс</span>
-          <span className="font-mono text-[#A1A1AA]">
-            0/{skills.length + goals.length}
-          </span>
+          {/* Пустое состояние */}
+          {goals.length === 0 && skills.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <span className="text-sm text-[#52525B]">Учитель не добавил целей и навыков</span>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -753,7 +816,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex min-h-[calc(100dvh-3.5rem)]">
-      <aside className="hidden lg:flex lg:w-[280px] lg:flex-shrink-0 lg:flex-col lg:border-r lg:border-[rgba(139,92,246,0.08)] lg:bg-[#0F0D17]">
+      <aside className="hidden lg:flex lg:w-[320px] lg:flex-shrink-0 lg:flex-col lg:border-r lg:border-[rgba(139,92,246,0.08)] lg:bg-[#0F0D17]">
         {sidebarContent}
       </aside>
 
@@ -764,7 +827,7 @@ export default function ChatPage() {
             onClick={() => setSidebarOpen(false)}
             aria-hidden="true"
           />
-          <aside className="fixed left-0 top-0 z-50 h-full w-[280px] overflow-y-auto bg-[#0F0D17] lg:hidden">
+          <aside className="fixed left-0 top-0 z-50 h-full w-[320px] overflow-y-auto bg-[#0F0D17] lg:hidden">
             {sidebarContent}
           </aside>
         </>
