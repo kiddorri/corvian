@@ -194,6 +194,25 @@ export default function CalibrateTopicPage() {
   const [theorySavedAt, setTheorySavedAt] = useState<number | null>(null);
   const [theoryError, setTheoryError] = useState<string | null>(null);
 
+  // Lesson generation state
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [generatedPlan, setGeneratedPlan] = useState<{
+    theory: string;
+    huginn_steps: Array<{
+      explanation: string;
+      question: string;
+      correct_answer: string;
+      hint: string;
+    }>;
+    tasks: Array<{
+      question: string;
+      answer: string;
+      steps: string;
+      difficulty: number;
+    }>;
+  } | null>(null);
+
   // Tab 4 (AI settings) state
   const [socraticLevel, setSocraticLevel] = useState(65);
   const [maxHints, setMaxHints] = useState(3);
@@ -366,6 +385,71 @@ export default function CalibrateTopicPage() {
       setTheorySavedAt((current) => (current === stamp ? null : current));
     }, 2000);
     await syncIsCalibrated({ theoryText });
+  }
+
+  async function handleGenerateLesson() {
+    if (!uploadedFile || !topic) return;
+    setGenerating(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadedFile);
+      formData.append("topicName", topic.name);
+      formData.append("topicSection", topic.section);
+      formData.append("grade", "10");
+      formData.append("subject", "Математика");
+      formData.append("topicId", topicId as string);
+
+      const res = await fetch("/api/generate-lesson", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        alert("Ошибка: " + data.error);
+        return;
+      }
+
+      setGeneratedPlan(data.plan);
+      setTheoryText(data.plan.theory);
+      setHuginnInstructions(
+        "ПЛАН УРОКА (следуй пошагово):\n" +
+          JSON.stringify(data.plan.huginn_steps, null, 2),
+      );
+    } catch (err) {
+      alert(
+        "Ошибка генерации: " +
+          (err instanceof Error ? err.message : "Неизвестная ошибка"),
+      );
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function handleApplyTasks() {
+    if (!generatedPlan) return;
+    const supabase = createClient();
+
+    for (let i = 0; i < generatedPlan.tasks.length; i++) {
+      const t = generatedPlan.tasks[i];
+      await supabase.from("tasks").insert({
+        topic_id: topicId,
+        question: t.question,
+        answer: t.answer,
+        steps: t.steps || "",
+        difficulty: t.difficulty,
+        sort_order: tasks.length + i,
+      });
+    }
+
+    const { data } = await supabase
+      .from("tasks")
+      .select("*, skills(text)")
+      .eq("topic_id", topicId)
+      .order("sort_order");
+    if (data) setTasks(data as Task[]);
+
+    alert(`Добавлено ${generatedPlan.tasks.length} задач`);
   }
 
   async function saveAi() {
@@ -703,6 +787,74 @@ export default function CalibrateTopicPage() {
             <div className={cardClass}>
               <h2 className={blockTitleClass}>Теоретический материал</h2>
               <div className="mt-4 flex flex-col gap-4">
+                {/* Блок загрузки файла */}
+                <div className="rounded-xl border border-dashed border-[rgba(139,92,246,0.2)] bg-[#09070F] p-6">
+                  <h4 className="mb-3 text-sm font-semibold text-[#F4F4F5]">
+                    📄 Загрузить материал и сгенерировать план урока
+                  </h4>
+                  <p className="mb-4 text-xs text-[#71717A]">
+                    Загрузите PDF учебника, презентацию или фото конспекта — AI
+                    создаст теорию, вопросы и задачи
+                  </p>
+
+                  <div className="flex items-center gap-3">
+                    <label className="cursor-pointer rounded-lg border border-[rgba(139,92,246,0.15)] bg-[#0F0D17] px-4 py-2 text-sm text-[#A1A1AA] transition-colors hover:border-[rgba(139,92,246,0.25)] hover:text-[#F4F4F5]">
+                      {uploadedFile ? uploadedFile.name : "Выбрать файл"}
+                      <input
+                        type="file"
+                        accept=".pdf,.png,.jpg,.jpeg,.pptx"
+                        className="hidden"
+                        onChange={(e) =>
+                          setUploadedFile(e.target.files?.[0] ?? null)
+                        }
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={handleGenerateLesson}
+                      disabled={!uploadedFile || generating}
+                      className="rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] px-4 py-2 text-sm font-medium text-white transition-opacity disabled:opacity-40"
+                    >
+                      {generating
+                        ? "Генерирую план урока..."
+                        : "✨ Сгенерировать"}
+                    </button>
+                  </div>
+
+                  {uploadedFile && (
+                    <p className="mt-2 text-xs text-[#52525B]">
+                      {(uploadedFile.size / 1024 / 1024).toFixed(1)} MB ·{" "}
+                      {uploadedFile.type}
+                    </p>
+                  )}
+                </div>
+
+                {/* Результат генерации */}
+                {generatedPlan && (
+                  <div className="rounded-xl border border-[rgba(139,92,246,0.15)] bg-[#0F0D17] p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-[#F4F4F5]">
+                          ✅ План сгенерирован
+                        </p>
+                        <p className="text-xs text-[#71717A]">
+                          Теория заполнена ·{" "}
+                          {generatedPlan.huginn_steps.length} шагов для Хугина ·{" "}
+                          {generatedPlan.tasks.length} задач для Мунина
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleApplyTasks}
+                        className="rounded-lg border border-[rgba(139,92,246,0.15)] bg-[#181525] px-3 py-1.5 text-xs font-medium text-[#8B5CF6] transition-colors hover:bg-[rgba(139,92,246,0.1)]"
+                      >
+                        Добавить задачи в Мунина
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <label
                     htmlFor="theory-text"
