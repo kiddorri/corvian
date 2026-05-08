@@ -204,6 +204,39 @@ export default function ChatPage() {
     setChatPhase("result");
   }, [sessionId, topicId, student, refreshStudent]);
 
+  const handleReturnToHuginn = useCallback(async () => {
+    if (!topicId || !student || isLoading) return;
+    const supabase = createClient();
+
+    if (sessionId) {
+      await supabase
+        .from("chat_sessions")
+        .update({ ended_at: new Date().toISOString() })
+        .eq("id", sessionId);
+    }
+
+    const { data: newSession, error } = await supabase
+      .from("chat_sessions")
+      .insert({
+        student_id: student.id,
+        topic_id: topicId,
+        raven: "huginn",
+      })
+      .select("id")
+      .single();
+    if (error || !newSession) {
+      setBootstrapError("Не удалось вернуться к теории.");
+      return;
+    }
+
+    setSessionId(newSession.id);
+    setCurrentRaven("huginn");
+    setMessages([]);
+    messagesRef.current = [];
+    setChatPhase("huginn");
+    sentInitialRef.current = false;
+  }, [sessionId, topicId, student, isLoading]);
+
   const sendMessage = useCallback(
     async (
       text: string,
@@ -739,6 +772,18 @@ export default function ChatPage() {
       </div>
 
       <div className="sticky bottom-0 border-t border-[rgba(139,92,246,0.08)] bg-[#0F0D17] px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        {chatPhase === "muninn" && (
+          <div className="mb-2 flex justify-start">
+            <button
+              type="button"
+              onClick={handleReturnToHuginn}
+              disabled={isLoading || !bootstrapped}
+              className="text-sm text-[#A1A1AA] transition-colors hover:text-[#F4F4F5] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              ↩ Вернуться к теории
+            </button>
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
