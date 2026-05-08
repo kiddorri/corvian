@@ -69,6 +69,21 @@ export default function JoinPage() {
     setLoading(true);
 
     const supabase = createClient();
+
+    const { data: existingStudent } = await supabase
+      .from("students")
+      .select("id")
+      .eq("class_id", classData.id)
+      .eq("display_name", nicknameTrimmed)
+      .single();
+
+    if (existingStudent) {
+      localStorage.setItem("corvian_student_id", existingStudent.id);
+      localStorage.setItem("corvian_class_code", fullCode);
+      router.push("/student");
+      return;
+    }
+
     const { data, error: dbError } = await supabase
       .from("students")
       .insert({ class_id: classData.id, display_name: nicknameTrimmed })
