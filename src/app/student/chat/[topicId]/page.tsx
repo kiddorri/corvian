@@ -577,7 +577,7 @@ export default function ChatPage() {
 
   if (chatPhase === "transition") {
     return (
-      <div className="-mx-4 -my-4 flex min-h-[calc(100dvh-3.5rem)] flex-col items-center justify-center bg-[radial-gradient(circle_at_50%_40%,rgba(129,140,248,0.18),rgba(139,92,246,0.12)_40%,transparent_70%)] px-6 transition-colors duration-1000 lg:-mx-6 lg:-my-6">
+      <div className="flex min-h-[calc(100dvh-3.5rem)] flex-col items-center justify-center bg-[radial-gradient(circle_at_50%_40%,rgba(129,140,248,0.18),rgba(139,92,246,0.12)_40%,transparent_70%)] px-6 transition-colors duration-1000">
         <div className="flex items-center gap-6">
           <span
             className="text-5xl transition-all duration-700"
@@ -617,7 +617,7 @@ export default function ChatPage() {
   if (chatPhase === "result" && resultData) {
     const color = scoreColor(resultData.score);
     return (
-      <div className="-mx-4 -my-4 flex min-h-[calc(100dvh-3.5rem)] flex-col items-center justify-center px-6 lg:-mx-6 lg:-my-6">
+      <div className="flex min-h-[calc(100dvh-3.5rem)] flex-col items-center justify-center px-6">
         <div
           aria-hidden="true"
           className="pointer-events-none absolute left-1/2 top-1/2 -z-10 h-[420px] w-[420px] -translate-x-1/2 -translate-y-1/2"

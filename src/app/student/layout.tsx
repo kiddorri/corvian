@@ -46,6 +46,7 @@ function isActive(pathname: string, href: string): boolean {
 export default function StudentLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const isChatPage = pathname.startsWith("/student/chat");
   const [student, setStudent] = useState<Student | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -130,7 +131,7 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        <main className="mx-auto max-w-3xl p-4 lg:px-6 lg:py-6">{children}</main>
+        <main className={`mx-auto ${isChatPage ? "max-w-none" : "max-w-3xl p-4 lg:px-6 lg:py-6"}`}>{children}</main>
 
         <nav
           className="fixed bottom-0 left-0 right-0 z-30 border-t border-[rgba(139,92,246,0.08)] bg-[#0F0D17] pb-[env(safe-area-inset-bottom)] lg:hidden"
