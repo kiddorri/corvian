@@ -107,7 +107,7 @@ export default function LearningPath() {
         <p className="mt-6 text-sm text-[#71717A]">Загружаю...</p>
       ) : topics.length === 0 ? (
         <p className="mt-8 text-center text-sm text-[#71717A]">
-          Учитель пока не добавил тем
+          Нет доступных тем. Учитель ещё не опубликовал материалы.
         </p>
       ) : (
         <ol className="mt-6">
