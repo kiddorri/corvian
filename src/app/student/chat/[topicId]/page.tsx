@@ -11,7 +11,10 @@ import {
   useState,
 } from "react";
 import { Info, Send } from "lucide-react";
-import katex from "katex";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { createClient } from "@/lib/supabase/client";
 import { StudentContext } from "../../layout";
@@ -45,29 +48,39 @@ const XP_HUGINN_SESSION = 50;
 const XP_TOPIC_COMPLETE = 100;
 const BASE_SCORE = 80;
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function renderWithKaTeX(text: string): string {
-  const parts = text.split(/(\$[^$]+\$)/g);
-  return parts
-    .map((part) => {
-      if (part.length > 1 && part.startsWith("$") && part.endsWith("$")) {
-        const formula = part.slice(1, -1);
-        try {
-          return katex.renderToString(formula, { throwOnError: false });
-        } catch {
-          return escapeHtml(part);
-        }
-      }
-      return escapeHtml(part);
-    })
-    .join("")
-    .replace(/\n/g, "<br/>");
+function MessageContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={{
+        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+        strong: ({ children }) => <strong className="font-semibold text-[#F4F4F5]">{children}</strong>,
+        em: ({ children }) => <em className="italic">{children}</em>,
+        ul: ({ children }) => <ul className="mb-2 ml-4 list-disc last:mb-0">{children}</ul>,
+        ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal last:mb-0">{children}</ol>,
+        li: ({ children }) => <li className="mb-0.5">{children}</li>,
+        code: ({ children, className }) => {
+          const isBlock = className?.includes("language-");
+          if (isBlock) {
+            return (
+              <pre className="my-2 overflow-x-auto rounded-lg bg-[#09070F] p-3 text-xs">
+                <code>{children}</code>
+              </pre>
+            );
+          }
+          return (
+            <code className="rounded bg-[#181525] px-1.5 py-0.5 text-xs font-mono text-[#818CF8]">
+              {children}
+            </code>
+          );
+        },
+        hr: () => <hr className="my-3 border-[rgba(139,92,246,0.08)]" />,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 function scoreColor(score: number): string {
@@ -872,12 +885,9 @@ export default function ChatPage() {
             if (msg.role === "user") {
               return (
                 <div key={i} className="flex justify-end">
-                  <div
-                    className="max-w-[80%] whitespace-pre-wrap rounded-[12px_12px_2px_12px] border border-[rgba(139,92,246,0.2)] bg-[rgba(139,92,246,0.15)] px-4 py-2 text-sm text-[#F4F4F5]"
-                    dangerouslySetInnerHTML={{
-                      __html: renderWithKaTeX(msg.content),
-                    }}
-                  />
+                  <div className="max-w-[80%] rounded-[12px_12px_2px_12px] border border-[rgba(139,92,246,0.2)] bg-[rgba(139,92,246,0.15)] px-4 py-2 text-sm text-[#F4F4F5]">
+                    <MessageContent content={msg.content} />
+                  </div>
                 </div>
               );
             }
@@ -892,12 +902,9 @@ export default function ChatPage() {
                 >
                   {ravenMeta.emoji}
                 </div>
-                <div
-                  className="max-w-[80%] whitespace-pre-wrap rounded-[12px_12px_12px_2px] border border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.04)] px-4 py-2 text-sm text-[#A1A1AA]"
-                  dangerouslySetInnerHTML={{
-                    __html: renderWithKaTeX(msg.content),
-                  }}
-                />
+                <div className="max-w-[80%] rounded-[12px_12px_12px_2px] border border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.04)] px-4 py-2 text-sm text-[#A1A1AA]">
+                  <MessageContent content={msg.content} />
+                </div>
               </div>
             );
           })}
