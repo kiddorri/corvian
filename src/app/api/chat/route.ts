@@ -323,12 +323,29 @@ async function checkGoalProgress(
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
+      model: "claude-sonnet-4-20250514",
       max_tokens: 256,
       messages: [
         {
           role: "user",
-          content: `Вот диалог учителя и ученика:\n\n${dialog}\n\nВот цели обучения:\n${goalsList}\n\nКакие цели ученик ДОКАЗАЛ что понимает (правильно ответил или верно объяснил)?\n\nВерни ТОЛЬКО JSON массив id освоенных целей. Если ни одна не освоена — верни пустой массив.\nПример: ["abc-123", "def-456"]\nНе добавляй цель если ученик просто упомянул её или повторил определение — нужен ПРАВИЛЬНЫЙ ответ на вопрос.`,
+          content: `Проанализируй диалог учителя и ученика.
+
+ДИАЛОГ:
+${dialog}
+
+ЦЕЛИ ОБУЧЕНИЯ:
+${goalsList}
+
+Какие цели ученик ОСВОИЛ? Цель считается освоенной если:
+- Ученик правильно ответил на вопрос по этой цели
+- Ученик показал понимание концепции (даже если ответ неидеальный по форме)
+- Учитель подтвердил правильность ("Верно", "Точно", "Молодец", "Именно", "Отлично")
+
+НЕ требуй идеального ответа — достаточно показать понимание сути.
+
+Ответь ТОЛЬКО JSON массивом id освоенных целей. Никакого текста до или после JSON.
+Если ни одна цель не освоена — ответь: []
+Пример ответа: ["abc-123"]`,
         },
       ],
     });
@@ -338,12 +355,13 @@ async function checkGoalProgress(
       .map((b) => b.text)
       .join("");
 
-    const cleaned = text
-      .replace(/```json\s*/g, "")
-      .replace(/```\s*/g, "")
-      .trim();
-    const ids = JSON.parse(cleaned);
-    return Array.isArray(ids) ? ids : [];
+    const jsonMatch = text.match(/\[[\s\S]*?\]/);
+    if (!jsonMatch) return [];
+
+    const ids = JSON.parse(jsonMatch[0]);
+    return Array.isArray(ids)
+      ? ids.filter((id: unknown) => typeof id === "string")
+      : [];
   } catch (err) {
     console.error("checkGoalProgress error:", err);
     return [];
