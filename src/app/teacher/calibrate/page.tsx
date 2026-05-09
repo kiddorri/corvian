@@ -241,20 +241,18 @@ export default function CalibratePage() {
         body: formData,
       });
 
-      if (!res.ok) {
-        let errorMsg = "Ошибка сервера";
-        try {
-          const data = await res.json();
-          errorMsg = data.error || errorMsg;
-        } catch {
-          const text = await res.text();
-          errorMsg = text.slice(0, 200) || `HTTP ${res.status}`;
-        }
-        throw new Error(errorMsg);
+      const responseText = await res.text();
+
+      let data: { error?: string } & BulkPlan;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new Error(responseText.slice(0, 300) || `HTTP ${res.status}`);
       }
 
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
 
       setBulkProgress("Готово!");
       setBulkPlan(data as BulkPlan);
