@@ -116,12 +116,18 @@ export async function POST(req: NextRequest) {
       { role: "user" as const, content: message },
     ];
 
-    const stream = anthropic.messages.stream({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
-      system: systemPrompt,
-      messages,
-    });
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), 30000);
+
+    const stream = anthropic.messages.stream(
+      {
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages,
+      },
+      { signal: abortController.signal },
+    );
 
     const encoder = new TextEncoder();
     let fullResponse = "";
@@ -142,6 +148,8 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          clearTimeout(timeout);
+
           await supabase
             .from("chat_messages")
             .insert({
@@ -154,7 +162,9 @@ export async function POST(req: NextRequest) {
             encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`),
           );
           controller.close();
-        } catch {
+        } catch (err) {
+          console.error("Chat API stream error:", err);
+          clearTimeout(timeout);
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({
@@ -174,7 +184,8 @@ export async function POST(req: NextRequest) {
         Connection: "keep-alive",
       },
     });
-  } catch {
+  } catch (err) {
+    console.error("Chat API error:", err);
     return Response.json({ error: "Ошибка сервера" }, { status: 500 });
   }
 }

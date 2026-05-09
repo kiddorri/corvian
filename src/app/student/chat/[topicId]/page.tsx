@@ -122,6 +122,8 @@ export default function ChatPage() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingTextRef = useRef<string>("");
   const sentInitialRef = useRef(false);
   // latest messages snapshot for closure-free reads
   const messagesRef = useRef<Message[]>([]);
@@ -335,14 +337,20 @@ export default function ChatPage() {
               const data = JSON.parse(line.slice(6));
               if (data.text) {
                 assistant += data.text;
-                setMessages((prev) => {
-                  const updated = [...prev];
-                  updated[updated.length - 1] = {
-                    role: "assistant",
-                    content: assistant,
-                  };
-                  return updated;
-                });
+                pendingTextRef.current = assistant;
+                if (!throttleRef.current) {
+                  throttleRef.current = setTimeout(() => {
+                    setMessages((prev) => {
+                      const updated = [...prev];
+                      updated[updated.length - 1] = {
+                        role: "assistant" as const,
+                        content: pendingTextRef.current,
+                      };
+                      return updated;
+                    });
+                    throttleRef.current = null;
+                  }, 80);
+                }
               }
               if (data.error) {
                 errored = true;
@@ -360,6 +368,21 @@ export default function ChatPage() {
             }
           }
         }
+      }
+
+      if (throttleRef.current) {
+        clearTimeout(throttleRef.current);
+        throttleRef.current = null;
+      }
+      if (!errored) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            role: "assistant" as const,
+            content: assistant,
+          };
+          return updated;
+        });
       }
 
       setIsLoading(false);
