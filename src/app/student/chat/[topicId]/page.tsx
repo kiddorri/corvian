@@ -354,6 +354,11 @@ export default function ChatPage() {
       if (errored) return;
 
       // Парсим маркеры целей
+      console.log("AI response for goal markers:", assistant);
+      console.log(
+        "Found markers:",
+        assistant.match(/\[GOAL_DONE:([^\]]+)\]/g),
+      );
       const goalMarkers = assistant.match(/\[GOAL_DONE:([^\]]+)\]/g);
       if (goalMarkers && student) {
         const sb = createClient();
@@ -747,7 +752,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex min-h-[calc(100dvh-3.5rem)]">
-      <aside className="hidden lg:flex lg:w-[320px] lg:flex-shrink-0 lg:flex-col lg:border-r lg:border-[rgba(139,92,246,0.08)] lg:bg-[#0F0D17]">
+      <aside className="hidden lg:flex lg:w-[320px] lg:flex-shrink-0 lg:flex-col lg:border-r lg:border-[rgba(255,255,255,0.06)] lg:bg-[#0F0D17] lg:sticky lg:top-0 lg:h-screen lg:overflow-y-auto">
         {sidebarContent}
       </aside>
 

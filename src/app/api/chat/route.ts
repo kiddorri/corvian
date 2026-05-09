@@ -217,7 +217,7 @@ function buildSystemPrompt({
   const tasksJson = JSON.stringify(tasks, null, 2);
 
   if (raven === "huginn") {
-    return `Ты — Хугин, ворон мысли. AI-тьютор на платформе Corvian.
+    const systemPrompt = `Ты — Хугин, ворон мысли. AI-тьютор на платформе Corvian.
 
 РОЛЬ: Объяснить тему ученику через диалог. Не читай лекцию — веди разговор. Задавай по одному короткому вопросу за раз.
 
@@ -261,6 +261,9 @@ ${
 - НЕ упоминай эти маркеры в обычной речи, не объясняй их ученику — это служебный сигнал системе
 - НЕ выдумывай id — используй ровно те, что в списке выше
 - Не отмечай цель раньше времени: только когда ученик действительно понял, не за один правильный ответ`;
+    console.log("System prompt length:", systemPrompt.length);
+    console.log("Goals in prompt:", goalsList);
+    return systemPrompt;
   }
 
   return `Ты — Мунин, ворон памяти. AI-тьютор на платформе Corvian.
