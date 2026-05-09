@@ -212,7 +212,7 @@ export async function POST(req: Request) {
       tasks: unknown[];
     }> = [];
 
-    const batchSize = 3;
+    const batchSize = 2;
     for (let i = 0; i < topicsToProcess.length; i += batchSize) {
       const batch = topicsToProcess.slice(i, i + batchSize);
 
@@ -264,10 +264,18 @@ ${topicOutline.learning_goals.map((g, idx) => `${idx + 1}. ${g}`).join("\n")}
             { timeout: 55000 },
           );
 
+          if (step2Response.stop_reason === "max_tokens") {
+            throw new Error("Response truncated (max_tokens)");
+          }
+
           const step2Text = step2Response.content
             .filter((b): b is Anthropic.TextBlock => b.type === "text")
             .map((b) => b.text)
             .join("");
+
+          console.log(
+            `[STEP2] Topic: "${topicOutline.name}", stop_reason: ${step2Response.stop_reason}, text_len: ${step2Text.length}`,
+          );
 
           const step2Match = step2Text.match(/\{[\s\S]*\}/);
           if (step2Match) {
@@ -303,23 +311,34 @@ ${topicOutline.learning_goals.map((g, idx) => `${idx + 1}. ${g}`).join("\n")}
           const retryResponse = await anthropic.messages.create(
             {
               model: "claude-haiku-4-5-20251001",
-              max_tokens: 3000,
+              max_tokens: 4096,
               messages: [
                 {
                   role: "user",
-                  content: `Создай план урока. Тема: "${topicOutline.name}". Класс: ${grade}, ${subject}.
+                  content: `МАТЕРИАЛЫ:\n${compactFileText.slice(0, 4000)}\n\nСоздай план урока. Тема: "${topicOutline.name}". Класс: ${grade}, ${subject}.
+
 Цели: ${topicOutline.learning_goals.join("; ")}
-Верни JSON: {"theory":"...","huginn_steps":[{"explanation":"...","question":"...","correct_answer":"...","hint":"..."}],"tasks":[{"question":"...","answer":"...","steps":"...","difficulty":1}]}
-5 шагов, 5 задач. Русский. LaTeX.`,
+
+Верни ТОЛЬКО JSON:
+{
+  "theory": "теория 150-300 слов с LaTeX",
+  "huginn_steps": [{"explanation":"...","question":"вопрос с числами","correct_answer":"...","hint":"..."}],
+  "tasks": [{"question":"задача с числами","answer":"...","steps":"решение","difficulty":1}]
+}
+
+5 шагов, 5 задач. Русский язык.`,
                 },
               ],
             },
-            { timeout: 30000 },
+            { timeout: 45000 },
           );
           const retryText = retryResponse.content
             .filter((b): b is Anthropic.TextBlock => b.type === "text")
             .map((b) => b.text)
             .join("");
+          console.log(
+            `[RETRY] Topic: "${topicOutline.name}", stop_reason: ${retryResponse.stop_reason}, text_len: ${retryText.length}`,
+          );
           const retryMatch = retryText.match(/\{[\s\S]*\}/);
           if (retryMatch) {
             fullTopics.push({
@@ -328,6 +347,9 @@ ${topicOutline.learning_goals.map((g, idx) => `${idx + 1}. ${g}`).join("\n")}
               ...JSON.parse(retryMatch[0]),
             });
           } else {
+            console.warn(
+              `[EMPTY] Topic "${topicOutline.name}" produced with empty content`,
+            );
             fullTopics.push({
               name: topicOutline.name,
               learning_goals: topicOutline.learning_goals,
@@ -340,6 +362,9 @@ ${topicOutline.learning_goals.map((g, idx) => `${idx + 1}. ${g}`).join("\n")}
           console.error(
             `Retry failed for topic: ${topicOutline.name}`,
             retryError,
+          );
+          console.warn(
+            `[EMPTY] Topic "${topicOutline.name}" produced with empty content`,
           );
           fullTopics.push({
             name: topicOutline.name,
