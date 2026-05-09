@@ -6,7 +6,36 @@ import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
-type ClassRow = { id: string; name: string };
+type ClassRow = {
+  id: string;
+  name: string;
+  grade?: number;
+  subject?: string;
+};
+
+type BulkTopicPlan = {
+  name: string;
+  theory: string;
+  learning_goals: string[];
+  huginn_steps: {
+    explanation: string;
+    question: string;
+    correct_answer: string;
+    hint: string;
+  }[];
+  tasks: {
+    question: string;
+    answer: string;
+    steps?: string;
+    difficulty: number;
+  }[];
+};
+
+type BulkPlan = {
+  section: string;
+  topics: BulkTopicPlan[];
+  fileCount: number;
+};
 type CalibrationRow = { topic_id: string };
 type TopicRow = {
   id: string;
@@ -43,6 +72,13 @@ export default function CalibratePage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
+  const [bulkFiles, setBulkFiles] = useState<File[]>([]);
+  const [bulkSectionName, setBulkSectionName] = useState("");
+  const [bulkGenerating, setBulkGenerating] = useState(false);
+  const [bulkPlan, setBulkPlan] = useState<BulkPlan | null>(null);
+  const [bulkApplying, setBulkApplying] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     const supabase = createClient();
@@ -70,7 +106,7 @@ export default function CalibratePage() {
 
       const { data, error } = await supabase
         .from("classes")
-        .select("id, name")
+        .select("id, name, grade, subject")
         .eq("teacher_id", teacher.id)
         .order("created_at", { ascending: false });
 
@@ -175,6 +211,72 @@ export default function CalibratePage() {
     return topic.is_calibrated && (topic.calibrations?.length ?? 0) > 0;
   }
 
+  async function handleBulkGenerate() {
+    if (
+      !bulkSectionName.trim() ||
+      bulkFiles.length === 0 ||
+      !selectedClassId
+    )
+      return;
+    setBulkGenerating(true);
+
+    try {
+      const selectedClass = classes.find((c) => c.id === selectedClassId);
+
+      const formData = new FormData();
+      formData.append("classId", selectedClassId);
+      formData.append("sectionName", bulkSectionName.trim());
+      formData.append("grade", String(selectedClass?.grade ?? ""));
+      formData.append("subject", selectedClass?.subject ?? "");
+      for (const file of bulkFiles) {
+        formData.append("files", file);
+      }
+
+      const res = await fetch("/api/generate-section", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      setBulkPlan(data as BulkPlan);
+    } catch (err) {
+      alert("Ошибка: " + (err instanceof Error ? err.message : "неизвестная"));
+    } finally {
+      setBulkGenerating(false);
+    }
+  }
+
+  async function handleBulkApply() {
+    if (!bulkPlan || !selectedClassId) return;
+    setBulkApplying(true);
+
+    try {
+      const res = await fetch("/api/apply-section", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          classId: selectedClassId,
+          sectionName: bulkPlan.section,
+          topics: bulkPlan.topics,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      alert(`Создано ${data.created.length} тем! Обновляю страницу...`);
+      setBulkUploadOpen(false);
+      setBulkPlan(null);
+      setBulkFiles([]);
+      setBulkSectionName("");
+      window.location.reload();
+    } catch (err) {
+      alert("Ошибка: " + (err instanceof Error ? err.message : "неизвестная"));
+    } finally {
+      setBulkApplying(false);
+    }
+  }
+
   return (
     <>
       <div>
@@ -229,13 +331,22 @@ export default function CalibratePage() {
         <section className="mt-8">
           <div className="flex items-center justify-between gap-4">
             <h2 className="text-lg font-semibold text-[#F4F4F5]">Темы</h2>
-            <button
-              type="button"
-              onClick={openModal}
-              className="inline-flex items-center justify-center rounded-lg bg-[linear-gradient(135deg,#7C3AED,#8B5CF6)] px-[1.3rem] py-[0.55rem] text-sm font-medium text-white shadow-[0_0_20px_rgba(124,58,237,0.3)] transition-all hover:-translate-y-px hover:shadow-[0_0_30px_rgba(124,58,237,0.4)]"
-            >
-              + Добавить тему
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setBulkUploadOpen(true)}
+                className="rounded-lg border border-[rgba(139,92,246,0.15)] bg-[#0F0D17] px-4 py-2 text-sm text-[#A1A1AA] transition-colors hover:border-[rgba(139,92,246,0.25)] hover:text-[#F4F4F5]"
+              >
+                📦 Загрузить раздел
+              </button>
+              <button
+                type="button"
+                onClick={openModal}
+                className="inline-flex items-center justify-center rounded-lg bg-[linear-gradient(135deg,#7C3AED,#8B5CF6)] px-[1.3rem] py-[0.55rem] text-sm font-medium text-white shadow-[0_0_20px_rgba(124,58,237,0.3)] transition-all hover:-translate-y-px hover:shadow-[0_0_30px_rgba(124,58,237,0.4)]"
+              >
+                + Добавить тему
+              </button>
+            </div>
           </div>
 
           {loadingTopics ? (
@@ -371,6 +482,170 @@ export default function CalibratePage() {
                 <p className="text-sm text-[#EF4444]">{formError}</p>
               )}
             </form>
+          </div>
+        </div>
+      )}
+
+      {bulkUploadOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-[rgba(139,92,246,0.15)] bg-[#0A0814] p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-[#F4F4F5]">
+                📦 Загрузить раздел целиком
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  if (bulkGenerating || bulkApplying) return;
+                  setBulkUploadOpen(false);
+                  setBulkPlan(null);
+                  setBulkFiles([]);
+                  setBulkSectionName("");
+                }}
+                className="text-[#71717A] hover:text-[#F4F4F5]"
+                aria-label="Закрыть"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {!bulkPlan ? (
+              <>
+                <p className="mb-4 text-sm text-[#71717A]">
+                  Загрузите все материалы раздела — AI автоматически разобьёт
+                  их на темы и создаст планы уроков.
+                </p>
+
+                <div className="mb-4">
+                  <label className={labelClass}>Название раздела</label>
+                  <input
+                    type="text"
+                    value={bulkSectionName}
+                    onChange={(e) => setBulkSectionName(e.target.value)}
+                    placeholder="Тригонометрия"
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="mb-4">
+                  <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed border-[rgba(139,92,246,0.2)] bg-[#09070F] p-8 transition-colors hover:border-[rgba(139,92,246,0.3)]">
+                    <span className="text-2xl">📄</span>
+                    <span className="text-sm text-[#A1A1AA]">
+                      Нажмите или перетащите файлы
+                    </span>
+                    <span className="text-xs text-[#52525B]">
+                      PDF, DOCX, PPTX, изображения
+                    </span>
+                    <input
+                      type="file"
+                      accept=".pdf,.png,.jpg,.jpeg,.pptx,.docx,.txt,.md"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        const newFiles = Array.from(e.target.files ?? []);
+                        setBulkFiles((prev) => [...prev, ...newFiles]);
+                      }}
+                    />
+                  </label>
+                </div>
+
+                {bulkFiles.length > 0 && (
+                  <div className="mb-4 space-y-1">
+                    {bulkFiles.map((f, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between rounded-lg bg-[#0F0D17] px-3 py-2 text-xs text-[#A1A1AA]"
+                      >
+                        <span>
+                          {f.name} ({(f.size / 1024 / 1024).toFixed(1)} MB)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setBulkFiles((prev) =>
+                              prev.filter((_, j) => j !== i),
+                            )
+                          }
+                          className="text-red-400 hover:text-red-300"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                    <p className="text-xs text-[#52525B]">
+                      {bulkFiles.length} файл(ов)
+                    </p>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleBulkGenerate}
+                  disabled={
+                    !bulkSectionName.trim() ||
+                    bulkFiles.length === 0 ||
+                    bulkGenerating
+                  }
+                  className="w-full rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] px-4 py-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
+                >
+                  {bulkGenerating
+                    ? "AI анализирует материалы..."
+                    : `✨ Разбить на темы (${bulkFiles.length} файлов)`}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="mb-4 text-sm text-[#A1A1AA]">
+                  AI предлагает{" "}
+                  <strong className="text-[#F4F4F5]">
+                    {bulkPlan.topics.length} тем
+                  </strong>{" "}
+                  для раздела «{bulkPlan.section}»:
+                </p>
+
+                <div className="mb-4 space-y-3">
+                  {bulkPlan.topics.map((topic, i) => (
+                    <div
+                      key={i}
+                      className="rounded-xl border border-[rgba(139,92,246,0.1)] bg-[#0F0D17] p-4"
+                    >
+                      <h4 className="mb-1 text-sm font-semibold text-[#F4F4F5]">
+                        {i + 1}. {topic.name}
+                      </h4>
+                      <p className="mb-2 line-clamp-2 text-xs text-[#71717A]">
+                        {topic.theory?.slice(0, 150)}...
+                      </p>
+                      <div className="flex gap-3 text-xs text-[#52525B]">
+                        <span>🎯 {topic.learning_goals?.length ?? 0} целей</span>
+                        <span>💬 {topic.huginn_steps?.length ?? 0} шагов</span>
+                        <span>📝 {topic.tasks?.length ?? 0} задач</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setBulkPlan(null)}
+                    disabled={bulkApplying}
+                    className="flex-1 rounded-lg border border-[rgba(139,92,246,0.15)] px-4 py-3 text-sm text-[#A1A1AA] hover:text-[#F4F4F5] disabled:opacity-40"
+                  >
+                    ← Назад
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBulkApply}
+                    disabled={bulkApplying}
+                    className="flex-1 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] px-4 py-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
+                  >
+                    {bulkApplying
+                      ? "Создаю темы..."
+                      : `✅ Создать ${bulkPlan.topics.length} тем`}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
