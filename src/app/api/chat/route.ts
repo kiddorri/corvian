@@ -107,6 +107,102 @@ async function initSessionSteps(
   }
 }
 
+async function advanceStep(
+  supabase: SupabaseLike,
+  sessionId: string,
+  topicId: string,
+  raven: string,
+  sessionState: SessionState | null,
+): Promise<{
+  advanced: boolean;
+  finished: boolean;
+  nextStepId: string | null;
+}> {
+  if (!sessionState?.current_step_id) {
+    return { advanced: false, finished: false, nextStepId: null };
+  }
+
+  const currentIndex = sessionState.step_index ?? 0;
+
+  if (raven === "huginn") {
+    await supabase
+      .from("goal_step_progress")
+      .update({
+        status: "completed",
+        completed_at: new Date().toISOString(),
+      })
+      .eq("session_id", sessionId)
+      .eq("goal_id", sessionState.current_step_id);
+
+    const { data: allGoals } = await supabase
+      .from("learning_goals")
+      .select("id")
+      .eq("topic_id", topicId)
+      .order("sort_order", { ascending: true });
+
+    const nextIndex = currentIndex + 1;
+
+    if (!allGoals || nextIndex >= allGoals.length) {
+      await supabase
+        .from("chat_sessions")
+        .update({ step_status: "completed" })
+        .eq("id", sessionId);
+      return { advanced: true, finished: true, nextStepId: null };
+    }
+
+    const nextGoal = allGoals[nextIndex] as { id: string };
+    await supabase
+      .from("chat_sessions")
+      .update({
+        current_step_id: nextGoal.id,
+        step_index: nextIndex,
+        step_status: "teaching",
+      })
+      .eq("id", sessionId);
+
+    return { advanced: true, finished: false, nextStepId: nextGoal.id };
+  } else if (raven === "muninn") {
+    await supabase
+      .from("task_progress")
+      .update({
+        status: "completed",
+        completed_at: new Date().toISOString(),
+      })
+      .eq("session_id", sessionId)
+      .eq("task_id", sessionState.current_step_id);
+
+    const { data: allTasks } = await supabase
+      .from("tasks")
+      .select("id")
+      .eq("topic_id", topicId)
+      .order("sort_order", { ascending: true });
+
+    const nextIndex = currentIndex + 1;
+
+    if (!allTasks || nextIndex >= allTasks.length) {
+      await supabase
+        .from("chat_sessions")
+        .update({ step_status: "completed" })
+        .eq("id", sessionId);
+      return { advanced: true, finished: true, nextStepId: null };
+    }
+
+    const nextTask = allTasks[nextIndex] as { id: string };
+    await supabase
+      .from("chat_sessions")
+      .update({
+        current_step_id: nextTask.id,
+        step_index: nextIndex,
+        step_status: "teaching",
+      })
+      .eq("id", sessionId);
+
+    return { advanced: true, finished: false, nextStepId: nextTask.id };
+  }
+
+  return { advanced: false, finished: false, nextStepId: null };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { sessionId, message, raven, topicId, studentId } = await req.json();
@@ -290,27 +386,39 @@ export async function POST(req: NextRequest) {
             ) {
               const text = event.delta.text;
               fullResponse += text;
-              controller.enqueue(
-                encoder.encode(`data: ${JSON.stringify({ text })}\n\n`),
-              );
+              const cleanChunk = text
+                .replace(/<step_done\/>/g, "")
+                .replace(/<task_done\/>/g, "");
+              if (cleanChunk) {
+                controller.enqueue(
+                  encoder.encode(
+                    `data: ${JSON.stringify({ text: cleanChunk })}\n\n`,
+                  ),
+                );
+              }
             }
           }
 
           clearTimeout(timeout);
+
+          const cleanedResponse = fullResponse
+            .replace(/<step_done\/>/g, "")
+            .replace(/<task_done\/>/g, "")
+            .trim();
 
           await supabase
             .from("chat_messages")
             .insert({
               session_id: sessionId,
               role: "assistant",
-              content: fullResponse,
+              content: cleanedResponse,
             });
 
           let goalsDone: string[] = [];
           if (raven === "huginn" && goals && goals.length > 0) {
             const allMessages = [
               ...messages,
-              { role: "assistant", content: fullResponse },
+              { role: "assistant", content: cleanedResponse },
             ];
             goalsDone = await checkGoalProgress(
               allMessages.map((m) => ({ role: m.role, content: m.content })),
@@ -318,9 +426,34 @@ export async function POST(req: NextRequest) {
             );
           }
 
+          // Обработка маркеров state machine
+          const hasStepDone = fullResponse.includes("<step_done/>");
+          const hasTaskDone = fullResponse.includes("<task_done/>");
+
+          let stepResult: {
+            advanced: boolean;
+            finished: boolean;
+            nextStepId: string | null;
+          } = { advanced: false, finished: false, nextStepId: null };
+
+          if (hasStepDone || hasTaskDone) {
+            stepResult = await advanceStep(
+              supabase,
+              sessionId,
+              topicId,
+              raven,
+              sessionState as SessionState | null,
+            );
+          }
+
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({ done: true, goalsDone })}\n\n`,
+              `data: ${JSON.stringify({
+                done: true,
+                goalsDone: goalsDone ?? [],
+                stepAdvanced: stepResult.advanced,
+                stepFinished: stepResult.finished,
+              })}\n\n`,
             ),
           );
           controller.close();
