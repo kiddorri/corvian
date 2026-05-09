@@ -80,6 +80,9 @@ export default function ChatPage() {
   const [transitionText, setTransitionText] = useState("Хугин улетает...");
   const [skills, setSkills] = useState<Skill[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [goalStatuses, setGoalStatuses] = useState<
+    Record<string, "not_started" | "in_progress" | "mastered">
+  >({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -350,6 +353,30 @@ export default function ChatPage() {
 
       if (errored) return;
 
+      // Парсим маркеры целей
+      const goalMarkers = assistant.match(/\[GOAL_DONE:([^\]]+)\]/g);
+      if (goalMarkers && student) {
+        const sb = createClient();
+        const newStatuses = { ...goalStatuses };
+        for (const marker of goalMarkers) {
+          const match = marker.match(/\[GOAL_DONE:([^\]]+)\]/);
+          if (match) {
+            const goalId = match[1].trim();
+            newStatuses[goalId] = "mastered";
+            await sb.from("goal_progress").upsert(
+              {
+                student_id: student.id,
+                goal_id: goalId,
+                status: "mastered",
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "student_id,goal_id" },
+            );
+          }
+        }
+        setGoalStatuses(newStatuses);
+      }
+
       // Detect phase transitions based on raven response
       if (rv === "huginn" && assistant.includes(HUGINN_DONE_PHRASE)) {
         handleHuginnComplete();
@@ -364,6 +391,7 @@ export default function ChatPage() {
       currentRaven,
       handleHuginnComplete,
       handleMuninComplete,
+      goalStatuses,
     ],
   );
 
@@ -408,6 +436,27 @@ export default function ChatPage() {
       if (cancelled) return;
       setSkills((skillsRes.data ?? []) as Skill[]);
       setGoals((goalsRes.data ?? []) as Goal[]);
+
+      const { data: goalProgressData } = await supabase
+        .from("goal_progress")
+        .select("goal_id, status")
+        .eq("student_id", studentId);
+
+      if (cancelled) return;
+      if (goalProgressData) {
+        const statuses: Record<string, string> = {};
+        goalProgressData.forEach(
+          (gp: { goal_id: string; status: string }) => {
+            statuses[gp.goal_id] = gp.status;
+          },
+        );
+        setGoalStatuses(
+          statuses as Record<
+            string,
+            "not_started" | "in_progress" | "mastered"
+          >,
+        );
+      }
 
       const { data: openSession } = await supabase
         .from("chat_sessions")
@@ -531,17 +580,25 @@ export default function ChatPage() {
   }, [isLoading, messages]);
 
   const goalProgress = useMemo(() => {
-    const userCount = messages.filter((m) => m.role === "user").length;
-    const PER_GOAL = 2;
     const out: Record<string, "not_started" | "in_progress" | "mastered"> = {};
+    const firstUnmasteredIdx = goals.findIndex(
+      (g) => goalStatuses[g.id] !== "mastered",
+    );
     goals.forEach((goal, i) => {
-      const currentIdx = Math.floor(userCount / PER_GOAL);
-      if (i < currentIdx) out[goal.id] = "mastered";
-      else if (i === currentIdx) out[goal.id] = "in_progress";
-      else out[goal.id] = "not_started";
+      if (goalStatuses[goal.id]) {
+        out[goal.id] = goalStatuses[goal.id];
+      } else {
+        const allPrevDone = goals
+          .slice(0, i)
+          .every((g) => goalStatuses[g.id] === "mastered");
+        out[goal.id] =
+          allPrevDone && i === firstUnmasteredIdx
+            ? "in_progress"
+            : "not_started";
+      }
     });
     return out;
-  }, [goals, messages]);
+  }, [goals, goalStatuses]);
 
   if (bootstrapError) {
     return (

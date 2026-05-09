@@ -59,7 +59,8 @@ function MessageContent({ text }: { text: string }) {
 }
 
 function parseBlocks(text: string): ReactNode[] {
-  const lines = text.split("\n");
+  const cleanText = text.replace(/\[GOAL_DONE:[^\]]+\]/g, "").trim();
+  const lines = cleanText.split("\n");
   const out: ReactNode[] = [];
   let i = 0;
   let key = 0;
