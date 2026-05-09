@@ -159,8 +159,22 @@ export async function POST(req: NextRequest) {
               content: fullResponse,
             });
 
+          let goalsDone: string[] = [];
+          if (raven === "huginn" && goals && goals.length > 0) {
+            const allMessages = [
+              ...messages,
+              { role: "assistant", content: fullResponse },
+            ];
+            goalsDone = await checkGoalProgress(
+              allMessages.map((m) => ({ role: m.role, content: m.content })),
+              goals as Array<{ id: string; text: string }>,
+            );
+          }
+
           controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`),
+            encoder.encode(
+              `data: ${JSON.stringify({ done: true, goalsDone })}\n\n`,
+            ),
           );
           controller.close();
         } catch (err) {
@@ -251,14 +265,7 @@ ${
 10. Для формул используй LaTeX: $формула$
 11. Отвечай кратко — 2-3 предложения максимум
 12. НЕ задавай открытые философские вопросы. Задавай конкретные вопросы с конкретным ответом
-13. Строгость: ${socraticLevel}/100 (0 = дружеский разговор, 100 = строгий экзаменатор)
-
-ВАЖНО — МАРКЕРЫ ЦЕЛЕЙ:
-После КАЖДОГО своего ответа проверь: показал ли ученик понимание какой-либо цели из списка ЦЕЛИ ОБУЧЕНИЯ?
-Если ДА — добавь в САМЫЙ КОНЕЦ ответа маркер: [GOAL_DONE:id]
-Где id — это значение в квадратных скобках перед текстом цели.
-Пример: если цель "[abc-123] определение синуса" и ученик показал понимание, напиши в конце: [GOAL_DONE:abc-123]
-Это ОБЯЗАТЕЛЬНО. Без маркеров прогресс ученика не отслеживается.`;
+13. Строгость: ${socraticLevel}/100 (0 = дружеский разговор, 100 = строгий экзаменатор)`;
     console.log("System prompt length:", systemPrompt.length);
     console.log("Goals in prompt:", goalsList);
     return systemPrompt;
@@ -300,4 +307,45 @@ ${calibration?.muninn_instructions ? `ИНСТРУКЦИИ УЧИТЕЛЯ:\n${ca
 8. Отвечай на русском языке
 9. Для формул: $формула$
 10. Отвечай кратко — 2-3 предложения`;
+}
+
+async function checkGoalProgress(
+  messages: Array<{ role: string; content: string }>,
+  goals: Array<{ id: string; text: string }>,
+): Promise<string[]> {
+  if (goals.length === 0) return [];
+
+  const goalsList = goals.map((g) => `[${g.id}] ${g.text}`).join("\n");
+  const lastMessages = messages.slice(-6);
+  const dialog = lastMessages
+    .map((m) => `${m.role}: ${m.content}`)
+    .join("\n");
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 256,
+      messages: [
+        {
+          role: "user",
+          content: `Вот диалог учителя и ученика:\n\n${dialog}\n\nВот цели обучения:\n${goalsList}\n\nКакие цели ученик ДОКАЗАЛ что понимает (правильно ответил или верно объяснил)?\n\nВерни ТОЛЬКО JSON массив id освоенных целей. Если ни одна не освоена — верни пустой массив.\nПример: ["abc-123", "def-456"]\nНе добавляй цель если ученик просто упомянул её или повторил определение — нужен ПРАВИЛЬНЫЙ ответ на вопрос.`,
+        },
+      ],
+    });
+
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+
+    const cleaned = text
+      .replace(/```json\s*/g, "")
+      .replace(/```\s*/g, "")
+      .trim();
+    const ids = JSON.parse(cleaned);
+    return Array.isArray(ids) ? ids : [];
+  } catch (err) {
+    console.error("checkGoalProgress error:", err);
+    return [];
+  }
 }
