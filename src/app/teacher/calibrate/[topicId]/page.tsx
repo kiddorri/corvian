@@ -412,9 +412,23 @@ export default function CalibrateTopicPage() {
 
       setGeneratedPlan(data.plan);
       setTheoryText(data.plan.theory);
+      const stepsText = data.plan.huginn_steps
+        .map(
+          (
+            step: {
+              explanation: string;
+              question: string;
+              correct_answer: string;
+              hint: string;
+            },
+            i: number,
+          ) =>
+            `ШАГ ${i + 1}:\nОбъясни: ${step.explanation}\nСпроси: ${step.question}\nПравильный ответ: ${step.correct_answer}\nПодсказка: ${step.hint}`,
+        )
+        .join("\n\n");
       setHuginnInstructions(
-        "ПЛАН УРОКА (следуй пошагово):\n" +
-          JSON.stringify(data.plan.huginn_steps, null, 2),
+        "ПЛАН УРОКА (веди ученика по шагам, задавай вопросы по одному):\n\n" +
+          stepsText,
       );
     } catch (err) {
       alert(
