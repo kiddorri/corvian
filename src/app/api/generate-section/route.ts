@@ -126,7 +126,7 @@ export async function POST(req: Request) {
       .join("\n\n");
 
     // Ограничить общий текст 20000 символов для ЭТАПА 2
-    const compactFileText = allFileTexts.slice(0, 20000);
+    const compactFileText = allFileTexts.slice(0, 8000);
 
     // ========== ЭТАП 1: Определить темы ==========
     const step1Content: Anthropic.ContentBlockParam[] = [
@@ -212,82 +212,135 @@ export async function POST(req: Request) {
       tasks: unknown[];
     }> = [];
 
-    for (const topicOutline of topicsToProcess) {
-      const step2Content: Anthropic.ContentBlockParam[] = [
-        {
-          type: "text",
-          text: `МАТЕРИАЛЫ ИЗ ФАЙЛОВ:\n\n${compactFileText}`,
-        },
-        {
-          type: "text",
-          text: `Ты — методист. Создай ПОЛНЫЙ план урока для ОДНОЙ темы из материалов выше.
+    const batchSize = 3;
+    for (let i = 0; i < topicsToProcess.length; i += batchSize) {
+      const batch = topicsToProcess.slice(i, i + batchSize);
+
+      const batchResults = await Promise.allSettled(
+        batch.map(async (topicOutline) => {
+          const step2Content: Anthropic.ContentBlockParam[] = [
+            {
+              type: "text",
+              text: `МАТЕРИАЛЫ ИЗ ФАЙЛОВ:\n\n${compactFileText}`,
+            },
+            {
+              type: "text",
+              text: `Ты — методист. Создай ПОЛНЫЙ план урока для ОДНОЙ темы.
 
 ТЕМА: ${topicOutline.name}
-ОПИСАНИЕ: ${topicOutline.description}
+ОПИСАНИЕ: ${topicOutline.description || ""}
 РАЗДЕЛ: ${sectionName}
 КЛАСС: ${grade}
 ПРЕДМЕТ: ${subject}
 
-ЦЕЛИ ОБУЧЕНИЯ (уже определены):
-${topicOutline.learning_goals.map((g, i) => `${i + 1}. ${g}`).join("\n")}
+ЦЕЛИ ОБУЧЕНИЯ:
+${topicOutline.learning_goals.map((g, idx) => `${idx + 1}. ${g}`).join("\n")}
 
 Верни ТОЛЬКО валидный JSON:
 
 {
-  "theory": "Теоретический материал по ЭТОЙ теме. Markdown + LaTeX ($формула$). 200-400 слов.",
+  "theory": "Теоретический материал. Markdown + LaTeX. 200-400 слов.",
   "huginn_steps": [
-    {
-      "explanation": "Что объяснить",
-      "question": "Конкретный вопрос с числами",
-      "correct_answer": "Ответ",
-      "hint": "Подсказка"
-    }
+    {"explanation": "Что объяснить", "question": "Вопрос с числами", "correct_answer": "Ответ", "hint": "Подсказка"}
   ],
   "tasks": [
-    {
-      "question": "Задача с числами",
-      "answer": "Ответ",
-      "steps": "Пошаговое решение",
-      "difficulty": 1
-    }
+    {"question": "Задача с числами", "answer": "Ответ", "steps": "Решение", "difficulty": 1}
   ]
 }
 
 ПРАВИЛА:
-- theory: используй информацию из материалов, относящуюся к ЭТОЙ теме
 - huginn_steps: 5-8 шагов
 - tasks: 5-10 задач, difficulty 1-5
-- Все вопросы с КОНКРЕТНЫМИ числами
-- Язык: русский`,
-        },
-      ];
+- Конкретные числа, LaTeX, русский язык`,
+            },
+          ];
 
-      try {
-        const step2Response = await anthropic.messages.create(
-          {
-            model: "claude-haiku-4-5-20251001",
-            max_tokens: 4096,
-            messages: [{ role: "user", content: step2Content }],
-          },
-          { timeout: 30000 },
+          const step2Response = await anthropic.messages.create(
+            {
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 4096,
+              messages: [{ role: "user", content: step2Content }],
+            },
+            { timeout: 55000 },
+          );
+
+          const step2Text = step2Response.content
+            .filter((b): b is Anthropic.TextBlock => b.type === "text")
+            .map((b) => b.text)
+            .join("");
+
+          const step2Match = step2Text.match(/\{[\s\S]*\}/);
+          if (step2Match) {
+            const topicDetail = JSON.parse(step2Match[0]);
+            return {
+              name: topicOutline.name,
+              learning_goals: topicOutline.learning_goals,
+              theory: topicDetail.theory || "",
+              huginn_steps: topicDetail.huginn_steps || [],
+              tasks: topicDetail.tasks || [],
+            };
+          }
+
+          throw new Error("No JSON in response");
+        }),
+      );
+
+      for (let j = 0; j < batchResults.length; j++) {
+        const result = batchResults[j];
+        const topicOutline = batch[j];
+
+        if (result.status === "fulfilled") {
+          fullTopics.push(result.value);
+          continue;
+        }
+
+        console.error(
+          `Failed for topic: ${topicOutline.name}`,
+          result.reason,
         );
 
-        const step2Text = step2Response.content
-          .filter((b): b is Anthropic.TextBlock => b.type === "text")
-          .map((b) => b.text)
-          .join("");
-
-        const step2Match = step2Text.match(/\{[\s\S]*\}/);
-        if (step2Match) {
-          const topicDetail = JSON.parse(step2Match[0]);
-          fullTopics.push({
-            name: topicOutline.name,
-            learning_goals: topicOutline.learning_goals,
-            theory: topicDetail.theory || "",
-            huginn_steps: topicDetail.huginn_steps || [],
-            tasks: topicDetail.tasks || [],
-          });
-        } else {
+        try {
+          const retryResponse = await anthropic.messages.create(
+            {
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 3000,
+              messages: [
+                {
+                  role: "user",
+                  content: `Создай план урока. Тема: "${topicOutline.name}". Класс: ${grade}, ${subject}.
+Цели: ${topicOutline.learning_goals.join("; ")}
+Верни JSON: {"theory":"...","huginn_steps":[{"explanation":"...","question":"...","correct_answer":"...","hint":"..."}],"tasks":[{"question":"...","answer":"...","steps":"...","difficulty":1}]}
+5 шагов, 5 задач. Русский. LaTeX.`,
+                },
+              ],
+            },
+            { timeout: 30000 },
+          );
+          const retryText = retryResponse.content
+            .filter((b): b is Anthropic.TextBlock => b.type === "text")
+            .map((b) => b.text)
+            .join("");
+          const retryMatch = retryText.match(/\{[\s\S]*\}/);
+          if (retryMatch) {
+            fullTopics.push({
+              name: topicOutline.name,
+              learning_goals: topicOutline.learning_goals,
+              ...JSON.parse(retryMatch[0]),
+            });
+          } else {
+            fullTopics.push({
+              name: topicOutline.name,
+              learning_goals: topicOutline.learning_goals,
+              theory: "",
+              huginn_steps: [],
+              tasks: [],
+            });
+          }
+        } catch (retryError) {
+          console.error(
+            `Retry failed for topic: ${topicOutline.name}`,
+            retryError,
+          );
           fullTopics.push({
             name: topicOutline.name,
             learning_goals: topicOutline.learning_goals,
@@ -296,18 +349,6 @@ ${topicOutline.learning_goals.map((g, i) => `${i + 1}. ${g}`).join("\n")}
             tasks: [],
           });
         }
-      } catch (topicError) {
-        console.error(
-          `Failed to generate details for topic: ${topicOutline.name}`,
-          topicError,
-        );
-        fullTopics.push({
-          name: topicOutline.name,
-          learning_goals: topicOutline.learning_goals,
-          theory: "",
-          huginn_steps: [],
-          tasks: [],
-        });
       }
     }
 
