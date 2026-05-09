@@ -1301,6 +1301,17 @@ export default function CalibrateTopicPage() {
                   {savingAi ? "Сохраняю..." : "Сохранить настройки"}
                 </button>
               </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  await saveAi();
+                  router.push("/teacher/calibrate");
+                }}
+                className="mt-3 w-full rounded-xl bg-gradient-to-r from-[#059669] to-[#10B981] px-6 py-3 text-base font-semibold text-white transition-opacity hover:opacity-90"
+              >
+                ✅ Завершить калибровку
+              </button>
             </div>
           </>
         )}
