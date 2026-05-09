@@ -414,18 +414,6 @@ export async function POST(req: NextRequest) {
               content: cleanedResponse,
             });
 
-          let goalsDone: string[] = [];
-          if (raven === "huginn" && goals && goals.length > 0) {
-            const allMessages = [
-              ...messages,
-              { role: "assistant", content: cleanedResponse },
-            ];
-            goalsDone = await checkGoalProgress(
-              allMessages.map((m) => ({ role: m.role, content: m.content })),
-              goals as Array<{ id: string; text: string }>,
-            );
-          }
-
           // Обработка маркеров state machine
           const hasStepDone = fullResponse.includes("<step_done/>");
           const hasTaskDone = fullResponse.includes("<task_done/>");
@@ -450,7 +438,6 @@ export async function POST(req: NextRequest) {
             encoder.encode(
               `data: ${JSON.stringify({
                 done: true,
-                goalsDone: goalsDone ?? [],
                 stepAdvanced: stepResult.advanced,
                 stepFinished: stepResult.finished,
               })}\n\n`,
@@ -589,61 +576,3 @@ ${currentTaskBlock}
 НЕ ставь маркер если ответ неправильный или ученик ещё не ответил.`;
 }
 
-async function checkGoalProgress(
-  messages: Array<{ role: string; content: string }>,
-  goals: Array<{ id: string; text: string }>,
-): Promise<string[]> {
-  if (goals.length === 0) return [];
-
-  const goalsList = goals.map((g) => `[${g.id}] ${g.text}`).join("\n");
-  const lastMessages = messages.slice(-6);
-  const dialog = lastMessages
-    .map((m) => `${m.role}: ${m.content}`)
-    .join("\n");
-
-  try {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 256,
-      messages: [
-        {
-          role: "user",
-          content: `Проанализируй диалог учителя и ученика.
-
-ДИАЛОГ:
-${dialog}
-
-ЦЕЛИ ОБУЧЕНИЯ:
-${goalsList}
-
-Какие цели ученик ОСВОИЛ? Цель считается освоенной если:
-- Ученик правильно ответил на вопрос по этой цели
-- Ученик показал понимание концепции (даже если ответ неидеальный по форме)
-- Учитель подтвердил правильность ("Верно", "Точно", "Молодец", "Именно", "Отлично")
-
-НЕ требуй идеального ответа — достаточно показать понимание сути.
-
-Ответь ТОЛЬКО JSON массивом id освоенных целей. Никакого текста до или после JSON.
-Если ни одна цель не освоена — ответь: []
-Пример ответа: ["abc-123"]`,
-        },
-      ],
-    });
-
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("");
-
-    const jsonMatch = text.match(/\[[\s\S]*?\]/);
-    if (!jsonMatch) return [];
-
-    const ids = JSON.parse(jsonMatch[0]);
-    return Array.isArray(ids)
-      ? ids.filter((id: unknown) => typeof id === "string")
-      : [];
-  } catch (err) {
-    console.error("checkGoalProgress error:", err);
-    return [];
-  }
-}

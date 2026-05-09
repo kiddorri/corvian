@@ -325,30 +325,6 @@ export default function ChatPage() {
                 });
               }
               if (data.done) {
-                if (
-                  Array.isArray(data.goalsDone) &&
-                  data.goalsDone.length > 0 &&
-                  student
-                ) {
-                  const sb = createClient();
-                  const newStatuses = { ...goalStatuses };
-                  for (const goalId of data.goalsDone as string[]) {
-                    if (newStatuses[goalId] !== "mastered") {
-                      newStatuses[goalId] = "mastered";
-                      await sb.from("goal_progress").upsert(
-                        {
-                          student_id: student.id,
-                          goal_id: goalId,
-                          status: "mastered",
-                          updated_at: new Date().toISOString(),
-                        },
-                        { onConflict: "student_id,goal_id" },
-                      );
-                    }
-                  }
-                  setGoalStatuses(newStatuses);
-                }
-
                 if (data.stepFinished) {
                   if (rv === "huginn") {
                     handleHuginnComplete();
@@ -356,7 +332,6 @@ export default function ChatPage() {
                     handleMuninComplete();
                   }
                 }
-
                 break;
               }
             } catch {
@@ -438,27 +413,6 @@ export default function ChatPage() {
       setSkills((skillsRes.data ?? []) as Skill[]);
       setGoals((goalsRes.data ?? []) as Goal[]);
 
-      const { data: goalProgressData } = await supabase
-        .from("goal_progress")
-        .select("goal_id, status")
-        .eq("student_id", studentId);
-
-      if (cancelled) return;
-      if (goalProgressData) {
-        const statuses: Record<string, string> = {};
-        goalProgressData.forEach(
-          (gp: { goal_id: string; status: string }) => {
-            statuses[gp.goal_id] = gp.status;
-          },
-        );
-        setGoalStatuses(
-          statuses as Record<
-            string,
-            "not_started" | "in_progress" | "mastered"
-          >,
-        );
-      }
-
       const { data: openSession } = await supabase
         .from("chat_sessions")
         .select("id, raven")
@@ -508,6 +462,29 @@ export default function ChatPage() {
       setSessionId(resolvedSessionId);
       setCurrentRaven(resolvedRaven);
       setChatPhase(resolvedRaven);
+
+      const { data: goalProgressData } = await supabase
+        .from("goal_step_progress")
+        .select("goal_id, status")
+        .eq("session_id", resolvedSessionId);
+
+      if (cancelled) return;
+      if (goalProgressData) {
+        const statuses: Record<string, string> = {};
+        for (const gp of goalProgressData as Array<{
+          goal_id: string;
+          status: string;
+        }>) {
+          statuses[gp.goal_id] =
+            gp.status === "completed" ? "mastered" : gp.status;
+        }
+        setGoalStatuses(
+          statuses as Record<
+            string,
+            "not_started" | "in_progress" | "mastered"
+          >,
+        );
+      }
 
       const { data: history } = await supabase
         .from("chat_messages")
