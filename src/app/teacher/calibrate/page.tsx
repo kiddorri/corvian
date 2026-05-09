@@ -228,6 +228,18 @@ export default function CalibratePage() {
 
       const parsedFiles = await Promise.all(bulkFiles.map(parseFileClient));
 
+      const hasContent = parsedFiles.some(
+        (f) =>
+          (f.type === "text" && f.text.trim().length > 0) ||
+          f.type === "pdf" ||
+          f.type === "image",
+      );
+      if (!hasContent) {
+        throw new Error(
+          "Не удалось извлечь текст ни из одного файла. Проверьте формат файлов.",
+        );
+      }
+
       setBulkProgress(
         `Отправляю ${parsedFiles.length} файлов AI для анализа...`,
       );
@@ -314,10 +326,20 @@ export default function CalibratePage() {
           topics: bulkPlan.topics,
         }),
       });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
 
-      alert(`Создано ${data.created.length} тем! Обновляю страницу...`);
+      const responseText = await res.text();
+      let data: { error?: string; created?: { id: string; name: string }[] };
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new Error(responseText.slice(0, 300) || `HTTP ${res.status}`);
+      }
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      alert(`Создано ${data.created?.length ?? 0} тем! Обновляю страницу...`);
       setBulkUploadOpen(false);
       setBulkPlan(null);
       setBulkFiles([]);
