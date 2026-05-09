@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { parseFileClient } from "@/lib/parse-file-client";
 
 type ClassRow = {
   id: string;
@@ -220,26 +221,61 @@ export default function CalibratePage() {
     )
       return;
     setBulkGenerating(true);
-    setBulkProgress("Загружаю файлы на сервер...");
+    setBulkProgress("Извлекаю текст из файлов...");
 
     try {
       const selectedClass = classes.find((c) => c.id === selectedClassId);
 
-      const formData = new FormData();
-      formData.append("classId", selectedClassId);
-      formData.append("sectionName", bulkSectionName.trim());
-      formData.append("grade", String(selectedClass?.grade ?? ""));
-      formData.append("subject", selectedClass?.subject ?? "");
-      for (const file of bulkFiles) {
-        formData.append("files", file);
+      const parsedFiles = await Promise.all(bulkFiles.map(parseFileClient));
+
+      setBulkProgress(
+        `Отправляю ${parsedFiles.length} файлов AI для анализа...`,
+      );
+
+      const textFiles = parsedFiles.filter((f) => f.type === "text" && f.text);
+      const binaryFiles = parsedFiles.filter(
+        (f) => f.type === "pdf" || f.type === "image",
+      );
+
+      let res: Response;
+
+      if (binaryFiles.length === 0) {
+        res = await fetch("/api/generate-section", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            classId: selectedClassId,
+            sectionName: bulkSectionName.trim(),
+            grade: String(selectedClass?.grade ?? ""),
+            subject: selectedClass?.subject ?? "",
+            textFiles: textFiles.map((f) => ({ name: f.name, text: f.text })),
+          }),
+        });
+      } else {
+        const formData = new FormData();
+        formData.append("classId", selectedClassId);
+        formData.append("sectionName", bulkSectionName.trim());
+        formData.append("grade", String(selectedClass?.grade ?? ""));
+        formData.append("subject", selectedClass?.subject ?? "");
+        formData.append(
+          "textFiles",
+          JSON.stringify(
+            textFiles.map((f) => ({ name: f.name, text: f.text })),
+          ),
+        );
+
+        for (const bf of binaryFiles) {
+          const originalFile = bulkFiles.find((f) => f.name === bf.name);
+          if (originalFile) {
+            formData.append("files", originalFile);
+          }
+        }
+
+        res = await fetch("/api/generate-section", {
+          method: "POST",
+          body: formData,
+        });
       }
-
-      setBulkProgress(`Отправляю ${bulkFiles.length} файлов AI для анализа...`);
-
-      const res = await fetch("/api/generate-section", {
-        method: "POST",
-        body: formData,
-      });
 
       const responseText = await res.text();
 
