@@ -6,7 +6,7 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   try {
@@ -69,6 +69,18 @@ export async function POST(req: Request) {
         });
       }
     }
+
+    // Собрать весь текст из файлов для компактного использования в ЭТАПЕ 2
+    const allFileTexts = fileBlocks
+      .filter(
+        (b): b is Anthropic.TextBlockParam =>
+          b.type === "text" && typeof b.text === "string",
+      )
+      .map((b) => b.text)
+      .join("\n\n");
+
+    // Ограничить общий текст 20000 символов для ЭТАПА 2
+    const compactFileText = allFileTexts.slice(0, 20000);
 
     // ========== ЭТАП 1: Определить темы ==========
     const step1Content: Anthropic.ContentBlockParam[] = [
@@ -156,10 +168,13 @@ export async function POST(req: Request) {
 
     for (const topicOutline of topicsToProcess) {
       const step2Content: Anthropic.ContentBlockParam[] = [
-        ...fileBlocks,
         {
           type: "text",
-          text: `Ты — методист. Создай ПОЛНЫЙ план урока для ОДНОЙ темы из загруженных материалов.
+          text: `МАТЕРИАЛЫ ИЗ ФАЙЛОВ:\n\n${compactFileText}`,
+        },
+        {
+          type: "text",
+          text: `Ты — методист. Создай ПОЛНЫЙ план урока для ОДНОЙ темы из материалов выше.
 
 ТЕМА: ${topicOutline.name}
 ОПИСАНИЕ: ${topicOutline.description}
@@ -173,10 +188,10 @@ ${topicOutline.learning_goals.map((g, i) => `${i + 1}. ${g}`).join("\n")}
 Верни ТОЛЬКО валидный JSON:
 
 {
-  "theory": "Теоретический материал по ЭТОЙ теме. Markdown + LaTeX ($формула$). 200-400 слов. Понятно для ${grade} класса.",
+  "theory": "Теоретический материал по ЭТОЙ теме. Markdown + LaTeX ($формула$). 200-400 слов.",
   "huginn_steps": [
     {
-      "explanation": "Что объяснить на этом шаге",
+      "explanation": "Что объяснить",
       "question": "Конкретный вопрос с числами",
       "correct_answer": "Ответ",
       "hint": "Подсказка"
@@ -184,8 +199,8 @@ ${topicOutline.learning_goals.map((g, i) => `${i + 1}. ${g}`).join("\n")}
   ],
   "tasks": [
     {
-      "question": "Задача с конкретными числами",
-      "answer": "Правильный ответ",
+      "question": "Задача с числами",
+      "answer": "Ответ",
       "steps": "Пошаговое решение",
       "difficulty": 1
     }
@@ -193,10 +208,9 @@ ${topicOutline.learning_goals.map((g, i) => `${i + 1}. ${g}`).join("\n")}
 }
 
 ПРАВИЛА:
-- theory: используй ТОЛЬКО информацию из загруженных файлов, относящуюся к ЭТОЙ теме
-- huginn_steps: 5-8 шагов от простого к сложному
-- tasks: 5-10 задач, difficulty от 1 до 5
-- Если в файлах есть готовые задачи по этой теме — используй их
+- theory: используй информацию из материалов, относящуюся к ЭТОЙ теме
+- huginn_steps: 5-8 шагов
+- tasks: 5-10 задач, difficulty 1-5
 - Все вопросы с КОНКРЕТНЫМИ числами
 - Язык: русский`,
         },
@@ -205,11 +219,11 @@ ${topicOutline.learning_goals.map((g, i) => `${i + 1}. ${g}`).join("\n")}
       try {
         const step2Response = await anthropic.messages.create(
           {
-            model: "claude-sonnet-4-20250514",
+            model: "claude-haiku-4-5-20251001",
             max_tokens: 4096,
             messages: [{ role: "user", content: step2Content }],
           },
-          { timeout: 55000 },
+          { timeout: 30000 },
         );
 
         const step2Text = step2Response.content
