@@ -327,6 +327,30 @@ export default function ChatPage() {
                   return updated;
                 });
               }
+              if (
+                data.done &&
+                Array.isArray(data.goalsDone) &&
+                data.goalsDone.length > 0 &&
+                student
+              ) {
+                const sb = createClient();
+                const newStatuses = { ...goalStatuses };
+                for (const goalId of data.goalsDone as string[]) {
+                  if (newStatuses[goalId] !== "mastered") {
+                    newStatuses[goalId] = "mastered";
+                    await sb.from("goal_progress").upsert(
+                      {
+                        student_id: student.id,
+                        goal_id: goalId,
+                        status: "mastered",
+                        updated_at: new Date().toISOString(),
+                      },
+                      { onConflict: "student_id,goal_id" },
+                    );
+                  }
+                }
+                setGoalStatuses(newStatuses);
+              }
             } catch {
               // ignore malformed line
             }
@@ -352,35 +376,6 @@ export default function ChatPage() {
       setIsLoading(false);
 
       if (errored) return;
-
-      // Парсим маркеры целей
-      console.log("AI response for goal markers:", assistant);
-      console.log(
-        "Found markers:",
-        assistant.match(/\[GOAL_DONE:([^\]]+)\]/g),
-      );
-      const goalMarkers = assistant.match(/\[GOAL_DONE:([^\]]+)\]/g);
-      if (goalMarkers && student) {
-        const sb = createClient();
-        const newStatuses = { ...goalStatuses };
-        for (const marker of goalMarkers) {
-          const match = marker.match(/\[GOAL_DONE:([^\]]+)\]/);
-          if (match) {
-            const goalId = match[1].trim();
-            newStatuses[goalId] = "mastered";
-            await sb.from("goal_progress").upsert(
-              {
-                student_id: student.id,
-                goal_id: goalId,
-                status: "mastered",
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "student_id,goal_id" },
-            );
-          }
-        }
-        setGoalStatuses(newStatuses);
-      }
 
       // Detect phase transitions based on raven response
       if (rv === "huginn" && assistant.includes(HUGINN_DONE_PHRASE)) {
