@@ -84,6 +84,7 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTextRef = useRef<string>("");
   const sentInitialRef = useRef(false);
@@ -591,9 +592,11 @@ export default function ChatPage() {
 
   // Auto-scroll on new messages
   useEffect(() => {
+    bottomAnchorRef.current?.scrollIntoView({ block: "end" });
     const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [messages, isLoading]);
 
   const showTyping = useMemo(() => {
@@ -885,6 +888,7 @@ export default function ChatPage() {
               </div>
             </div>
           )}
+          <div ref={bottomAnchorRef} aria-hidden="true" />
         </div>
       </div>
 
