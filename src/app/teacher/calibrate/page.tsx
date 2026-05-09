@@ -213,11 +213,14 @@ export default function CalibratePage() {
     return topic.is_calibrated && (topic.calibrations?.length ?? 0) > 0;
   }
 
-  async function handleDeleteTopic(topicId: string, topicName: string) {
+  async function handleDeleteTopic(
+    topicId: string,
+    topicName: string,
+    skipConfirm = false,
+  ) {
     if (
-      !confirm(
-        `Удалить тему "${topicName}"? Все цели, задачи и сессии будут удалены.`,
-      )
+      !skipConfirm &&
+      !confirm(`Удалить тему "${topicName}"? Все данные будут удалены.`)
     )
       return;
 
@@ -275,7 +278,7 @@ export default function CalibratePage() {
     )
       return;
     for (const topic of sectionTopics) {
-      await handleDeleteTopic(topic.id, topic.name);
+      await handleDeleteTopic(topic.id, topic.name, true);
     }
   }
 
