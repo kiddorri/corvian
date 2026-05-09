@@ -30,7 +30,7 @@ type Calibration = {
 };
 
 type Skill = { text: string; level: string };
-type Goal = { text: string };
+type Goal = { id: string; text: string };
 type Task = {
   question: string;
   answer: string;
@@ -63,8 +63,9 @@ export async function POST(req: NextRequest) {
 
     const { data: goals } = await supabase
       .from("learning_goals")
-      .select("text")
-      .eq("topic_id", topicId);
+      .select("id, text, sort_order")
+      .eq("topic_id", topicId)
+      .order("sort_order", { ascending: true });
 
     const { data: tasks } = await supabase
       .from("tasks")
@@ -212,7 +213,7 @@ function buildSystemPrompt({
   const socraticLevel = calibration?.socratic_level ?? 65;
   const maxHints = calibration?.max_hints_before_answer ?? 3;
   const skillsList = skills.map((s) => `- ${s.text} (${s.level})`).join("\n");
-  const goalsList = goals.map((g) => `- ${g.text}`).join("\n");
+  const goalsList = goals.map((g) => `- [${g.id}] ${g.text}`).join("\n");
   const tasksJson = JSON.stringify(tasks, null, 2);
 
   if (raven === "huginn") {
@@ -250,7 +251,16 @@ ${
 10. Для формул используй LaTeX: $формула$
 11. Отвечай кратко — 2-3 предложения максимум
 12. НЕ задавай открытые философские вопросы. Задавай конкретные вопросы с конкретным ответом
-13. Строгость: ${socraticLevel}/100 (0 = дружеский разговор, 100 = строгий экзаменатор)`;
+13. Строгость: ${socraticLevel}/100 (0 = дружеский разговор, 100 = строгий экзаменатор)
+
+ОТСЛЕЖИВАНИЕ ПРОГРЕССА ЦЕЛЕЙ:
+- Каждая цель в списке выше имеет id в квадратных скобках, например: "- [c1f2e3...] Понимать формулу корней"
+- Когда ученик уверенно показал ПОЛНОЕ освоение цели (правильно ответил на ключевые вопросы по ней) — добавь в конец своего сообщения маркер ровно в формате: [GOAL_DONE:<id>]
+- Маркер пишется одним токеном, без пробелов внутри скобок, на отдельной строке в конце
+- Можно отметить несколько целей одним сообщением — каждая на своей строке
+- НЕ упоминай эти маркеры в обычной речи, не объясняй их ученику — это служебный сигнал системе
+- НЕ выдумывай id — используй ровно те, что в списке выше
+- Не отмечай цель раньше времени: только когда ученик действительно понял, не за один правильный ответ`;
   }
 
   return `Ты — Мунин, ворон памяти. AI-тьютор на платформе Corvian.
