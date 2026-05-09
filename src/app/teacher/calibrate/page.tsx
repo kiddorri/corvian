@@ -213,6 +213,72 @@ export default function CalibratePage() {
     return topic.is_calibrated && (topic.calibrations?.length ?? 0) > 0;
   }
 
+  async function handleDeleteTopic(topicId: string, topicName: string) {
+    if (
+      !confirm(
+        `Удалить тему "${topicName}"? Все цели, задачи и сессии будут удалены.`,
+      )
+    )
+      return;
+
+    const supabase = createClient();
+
+    const { data: sessions } = await supabase
+      .from("chat_sessions")
+      .select("id")
+      .eq("topic_id", topicId);
+
+    if (sessions && sessions.length > 0) {
+      const sessionIds = (sessions as Array<{ id: string }>).map((s) => s.id);
+      await supabase
+        .from("chat_messages")
+        .delete()
+        .in("session_id", sessionIds);
+      await supabase
+        .from("goal_step_progress")
+        .delete()
+        .in("session_id", sessionIds);
+      await supabase
+        .from("task_progress")
+        .delete()
+        .in("session_id", sessionIds);
+      await supabase.from("chat_sessions").delete().eq("topic_id", topicId);
+    }
+
+    await supabase.from("student_progress").delete().eq("topic_id", topicId);
+
+    const { data: goals } = await supabase
+      .from("learning_goals")
+      .select("id")
+      .eq("topic_id", topicId);
+
+    if (goals && goals.length > 0) {
+      const goalIds = (goals as Array<{ id: string }>).map((g) => g.id);
+      await supabase.from("goal_progress").delete().in("goal_id", goalIds);
+    }
+
+    await supabase.from("learning_goals").delete().eq("topic_id", topicId);
+    await supabase.from("tasks").delete().eq("topic_id", topicId);
+    await supabase.from("skills").delete().eq("topic_id", topicId);
+    await supabase.from("calibrations").delete().eq("topic_id", topicId);
+    await supabase.from("topics").delete().eq("id", topicId);
+
+    setTopics((prev) => prev.filter((t) => t.id !== topicId));
+  }
+
+  async function handleDeleteSection(sectionName: string) {
+    const sectionTopics = topics.filter((t) => t.section === sectionName);
+    if (
+      !confirm(
+        `Удалить раздел "${sectionName}" и все ${sectionTopics.length} тем в нём?`,
+      )
+    )
+      return;
+    for (const topic of sectionTopics) {
+      await handleDeleteTopic(topic.id, topic.name);
+    }
+  }
+
   async function handleBulkGenerate() {
     if (
       !bulkSectionName.trim() ||
@@ -440,48 +506,123 @@ export default function CalibratePage() {
               </button>
             </div>
           ) : (
-            <ul className="mt-4 flex flex-col gap-3">
-              {topics.map((topic, index) => {
-                const calibrated = isTopicCalibrated(topic);
-                return (
-                  <li
-                    key={topic.id}
-                    className="flex items-center gap-4 rounded-xl border border-[rgba(139,92,246,0.08)] bg-[#0F0D17] p-4 transition-colors hover:border-[rgba(139,92,246,0.15)]"
-                  >
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#181525] font-mono text-xs text-[#A1A1AA]">
-                      {index + 1}
-                    </span>
+            <div className="mt-4 flex flex-col gap-6">
+              {(() => {
+                const groups = new Map<string, TopicRow[]>();
+                for (const t of topics) {
+                  const key = t.section || "Без раздела";
+                  const arr = groups.get(key) ?? [];
+                  arr.push(t);
+                  groups.set(key, arr);
+                }
+                return Array.from(groups.entries()).map(
+                  ([sectionName, sectionTopics]) => (
+                    <div key={sectionName}>
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <h3 className="text-sm font-semibold uppercase tracking-wider text-[#A1A1AA]">
+                          {sectionName}
+                          <span className="ml-2 text-xs text-[#52525B]">
+                            ({sectionTopics.length})
+                          </span>
+                        </h3>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSection(sectionName)}
+                          className="rounded-lg p-1.5 text-[#52525B] transition-colors hover:bg-red-500/10 hover:text-red-400"
+                          title="Удалить раздел"
+                          aria-label={`Удалить раздел ${sectionName}`}
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          </svg>
+                        </button>
+                      </div>
+                      <ul className="flex flex-col gap-3">
+                        {sectionTopics.map((topic, index) => {
+                          const calibrated = isTopicCalibrated(topic);
+                          return (
+                            <li
+                              key={topic.id}
+                              className="group relative flex items-center gap-4 rounded-xl border border-[rgba(139,92,246,0.08)] bg-[#0F0D17] p-4 transition-colors hover:border-[rgba(139,92,246,0.15)]"
+                            >
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteTopic(topic.id, topic.name);
+                                }}
+                                className="absolute right-2 top-2 rounded-lg p-1.5 text-[#52525B] opacity-0 transition-all hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100"
+                                title="Удалить тему"
+                                aria-label={`Удалить тему ${topic.name}`}
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <polyline points="3 6 5 6 21 6" />
+                                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                </svg>
+                              </button>
 
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium text-[#F4F4F5]">
-                        {topic.name}
-                      </p>
-                      <p className="mt-0.5 truncate text-sm text-[#A1A1AA]">
-                        {topic.section}
-                      </p>
-                    </div>
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#181525] font-mono text-xs text-[#A1A1AA]">
+                                {index + 1}
+                              </span>
 
-                    <div className="flex shrink-0 items-center gap-3">
-                      <span
-                        className={`inline-flex items-center rounded-full border px-[0.6rem] py-[0.2rem] text-xs font-semibold ${
-                          calibrated
-                            ? "border-[#22C55E40] bg-[#22C55E26] text-[#22C55E]"
-                            : "border-[rgba(113,113,122,0.4)] bg-transparent text-[#71717A]"
-                        }`}
-                      >
-                        {calibrated ? "Откалибровано" : "Не настроено"}
-                      </span>
-                      <Link
-                        href={`/teacher/calibrate/${topic.id}`}
-                        className="inline-flex items-center justify-center rounded-lg border border-[rgba(139,92,246,0.25)] bg-transparent px-[1rem] py-[0.4rem] text-sm font-medium text-[#F4F4F5] transition-all hover:border-[rgba(139,92,246,0.4)] hover:bg-[rgba(139,92,246,0.05)]"
-                      >
-                        Настроить
-                      </Link>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate font-medium text-[#F4F4F5]">
+                                  {topic.name}
+                                </p>
+                                <p className="mt-0.5 truncate text-sm text-[#A1A1AA]">
+                                  {topic.section}
+                                </p>
+                              </div>
+
+                              <div className="flex shrink-0 items-center gap-3 pr-8">
+                                <span
+                                  className={`inline-flex items-center rounded-full border px-[0.6rem] py-[0.2rem] text-xs font-semibold ${
+                                    calibrated
+                                      ? "border-[#22C55E40] bg-[#22C55E26] text-[#22C55E]"
+                                      : "border-[rgba(113,113,122,0.4)] bg-transparent text-[#71717A]"
+                                  }`}
+                                >
+                                  {calibrated
+                                    ? "Откалибровано"
+                                    : "Не настроено"}
+                                </span>
+                                <Link
+                                  href={`/teacher/calibrate/${topic.id}`}
+                                  className="inline-flex items-center justify-center rounded-lg border border-[rgba(139,92,246,0.25)] bg-transparent px-[1rem] py-[0.4rem] text-sm font-medium text-[#F4F4F5] transition-all hover:border-[rgba(139,92,246,0.4)] hover:bg-[rgba(139,92,246,0.05)]"
+                                >
+                                  Настроить
+                                </Link>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
                     </div>
-                  </li>
+                  ),
                 );
-              })}
-            </ul>
+              })()}
+            </div>
           )}
         </section>
       )}
