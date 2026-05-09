@@ -38,6 +38,69 @@ type Task = {
   difficulty: number;
 };
 
+type SupabaseLike = ReturnType<typeof getSupabase>;
+
+async function initSessionSteps(
+  supabase: SupabaseLike,
+  sessionId: string,
+  topicId: string,
+  raven: string,
+) {
+  if (raven === "huginn") {
+    const { data: goals } = await supabase
+      .from("learning_goals")
+      .select("id, text, sort_order")
+      .eq("topic_id", topicId)
+      .order("sort_order", { ascending: true });
+
+    if (goals && goals.length > 0) {
+      await supabase.from("goal_step_progress").insert(
+        goals.map((g: { id: string }) => ({
+          session_id: sessionId,
+          goal_id: g.id,
+          status: "pending",
+        })),
+      );
+
+      await supabase
+        .from("chat_sessions")
+        .update({
+          current_step_type: "goal",
+          current_step_id: goals[0].id,
+          step_index: 0,
+          step_status: "teaching",
+        })
+        .eq("id", sessionId);
+    }
+  } else if (raven === "muninn") {
+    const { data: tasks } = await supabase
+      .from("tasks")
+      .select("id, question, sort_order")
+      .eq("topic_id", topicId)
+      .order("sort_order", { ascending: true });
+
+    if (tasks && tasks.length > 0) {
+      await supabase.from("task_progress").insert(
+        tasks.map((t: { id: string }) => ({
+          session_id: sessionId,
+          task_id: t.id,
+          status: "pending",
+        })),
+      );
+
+      await supabase
+        .from("chat_sessions")
+        .update({
+          current_step_type: "task",
+          current_step_id: tasks[0].id,
+          step_index: 0,
+          step_status: "teaching",
+        })
+        .eq("id", sessionId);
+    }
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { sessionId, message, raven, topicId, studentId } = await req.json();
@@ -78,6 +141,18 @@ export async function POST(req: NextRequest) {
       .select("role, content")
       .eq("session_id", sessionId)
       .order("created_at", { ascending: true });
+
+    // Инициализировать шаги если это первое сообщение сессии
+    if (!history || history.length === 0) {
+      await initSessionSteps(supabase, sessionId, topicId, raven);
+    }
+
+    // Загрузить текущий шаг сессии
+    const { data: sessionState } = await supabase
+      .from("chat_sessions")
+      .select("current_step_type, current_step_id, step_index, step_status")
+      .eq("id", sessionId)
+      .single();
 
     let huginnSummary = "";
     if (raven === "muninn") {
