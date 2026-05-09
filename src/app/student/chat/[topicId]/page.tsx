@@ -39,9 +39,6 @@ const HUGINN_GREETING = "Привет! Я готов изучать эту те�
 const MUNINN_GREETING =
   "Привет, Мунин! Я прошёл теорию с Хугином и готов к задачам.";
 
-const HUGINN_DONE_PHRASE = "Мунин уже ждёт";
-const MUNINN_DONE_PHRASE = "Все задачи решены";
-
 const XP_HUGINN_SESSION = 50;
 const XP_TOPIC_COMPLETE = 100;
 const BASE_SCORE = 80;
@@ -83,9 +80,11 @@ export default function ChatPage() {
   const [goalStatuses, setGoalStatuses] = useState<
     Record<string, "not_started" | "in_progress" | "mastered">
   >({});
+  const [taskStatuses, setTaskStatuses] = useState<Record<string, string>>({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTextRef = useRef<string>("");
   const sentInitialRef = useRef(false);
@@ -327,29 +326,59 @@ export default function ChatPage() {
                   return updated;
                 });
               }
-              if (
-                data.done &&
-                Array.isArray(data.goalsDone) &&
-                data.goalsDone.length > 0 &&
-                student
-              ) {
-                const sb = createClient();
-                const newStatuses = { ...goalStatuses };
-                for (const goalId of data.goalsDone as string[]) {
-                  if (newStatuses[goalId] !== "mastered") {
-                    newStatuses[goalId] = "mastered";
-                    await sb.from("goal_progress").upsert(
-                      {
-                        student_id: student.id,
-                        goal_id: goalId,
-                        status: "mastered",
-                        updated_at: new Date().toISOString(),
-                      },
-                      { onConflict: "student_id,goal_id" },
-                    );
+              if (data.done) {
+                if (data.stepAdvanced && rv === "huginn" && sid) {
+                  const sb = createClient();
+                  const { data: updatedProgress } = await sb
+                    .from("goal_step_progress")
+                    .select("goal_id, status")
+                    .eq("session_id", sid);
+                  if (updatedProgress) {
+                    const newStatuses: Record<
+                      string,
+                      "not_started" | "in_progress" | "mastered"
+                    > = {};
+                    for (const gp of updatedProgress as Array<{
+                      goal_id: string;
+                      status: string;
+                    }>) {
+                      newStatuses[gp.goal_id] =
+                        gp.status === "completed"
+                          ? "mastered"
+                          : gp.status === "pending"
+                            ? "not_started"
+                            : "in_progress";
+                    }
+                    setGoalStatuses(newStatuses);
                   }
                 }
-                setGoalStatuses(newStatuses);
+
+                if (data.stepAdvanced && rv === "muninn" && sid) {
+                  const sb = createClient();
+                  const { data: updatedTasks } = await sb
+                    .from("task_progress")
+                    .select("task_id, status")
+                    .eq("session_id", sid);
+                  if (updatedTasks) {
+                    const tStatuses: Record<string, string> = {};
+                    for (const tp of updatedTasks as Array<{
+                      task_id: string;
+                      status: string;
+                    }>) {
+                      tStatuses[tp.task_id] = tp.status;
+                    }
+                    setTaskStatuses(tStatuses);
+                  }
+                }
+
+                if (data.stepFinished) {
+                  if (rv === "huginn") {
+                    handleHuginnComplete();
+                  } else if (rv === "muninn") {
+                    handleMuninComplete();
+                  }
+                }
+                break;
               }
             } catch {
               // ignore malformed line
@@ -376,13 +405,6 @@ export default function ChatPage() {
       setIsLoading(false);
 
       if (errored) return;
-
-      // Detect phase transitions based on raven response
-      if (rv === "huginn" && assistant.includes(HUGINN_DONE_PHRASE)) {
-        handleHuginnComplete();
-      } else if (rv === "muninn" && assistant.includes(MUNINN_DONE_PHRASE)) {
-        handleMuninComplete();
-      }
     },
     [
       student,
@@ -437,27 +459,6 @@ export default function ChatPage() {
       setSkills((skillsRes.data ?? []) as Skill[]);
       setGoals((goalsRes.data ?? []) as Goal[]);
 
-      const { data: goalProgressData } = await supabase
-        .from("goal_progress")
-        .select("goal_id, status")
-        .eq("student_id", studentId);
-
-      if (cancelled) return;
-      if (goalProgressData) {
-        const statuses: Record<string, string> = {};
-        goalProgressData.forEach(
-          (gp: { goal_id: string; status: string }) => {
-            statuses[gp.goal_id] = gp.status;
-          },
-        );
-        setGoalStatuses(
-          statuses as Record<
-            string,
-            "not_started" | "in_progress" | "mastered"
-          >,
-        );
-      }
-
       const { data: openSession } = await supabase
         .from("chat_sessions")
         .select("id, raven")
@@ -507,6 +508,29 @@ export default function ChatPage() {
       setSessionId(resolvedSessionId);
       setCurrentRaven(resolvedRaven);
       setChatPhase(resolvedRaven);
+
+      const { data: goalProgressData } = await supabase
+        .from("goal_step_progress")
+        .select("goal_id, status")
+        .eq("session_id", resolvedSessionId);
+
+      if (cancelled) return;
+      if (goalProgressData) {
+        const statuses: Record<string, string> = {};
+        for (const gp of goalProgressData as Array<{
+          goal_id: string;
+          status: string;
+        }>) {
+          statuses[gp.goal_id] =
+            gp.status === "completed" ? "mastered" : gp.status;
+        }
+        setGoalStatuses(
+          statuses as Record<
+            string,
+            "not_started" | "in_progress" | "mastered"
+          >,
+        );
+      }
 
       const { data: history } = await supabase
         .from("chat_messages")
@@ -568,9 +592,11 @@ export default function ChatPage() {
 
   // Auto-scroll on new messages
   useEffect(() => {
+    bottomAnchorRef.current?.scrollIntoView({ block: "end" });
     const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [messages, isLoading]);
 
   const showTyping = useMemo(() => {
@@ -862,6 +888,7 @@ export default function ChatPage() {
               </div>
             </div>
           )}
+          <div ref={bottomAnchorRef} aria-hidden="true" />
         </div>
       </div>
 
