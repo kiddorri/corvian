@@ -80,6 +80,7 @@ export default function ChatPage() {
   const [goalStatuses, setGoalStatuses] = useState<
     Record<string, "not_started" | "in_progress" | "mastered">
   >({});
+  const [taskStatuses, setTaskStatuses] = useState<Record<string, string>>({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -348,6 +349,24 @@ export default function ChatPage() {
                             : "in_progress";
                     }
                     setGoalStatuses(newStatuses);
+                  }
+                }
+
+                if (data.stepAdvanced && rv === "muninn" && sid) {
+                  const sb = createClient();
+                  const { data: updatedTasks } = await sb
+                    .from("task_progress")
+                    .select("task_id, status")
+                    .eq("session_id", sid);
+                  if (updatedTasks) {
+                    const tStatuses: Record<string, string> = {};
+                    for (const tp of updatedTasks as Array<{
+                      task_id: string;
+                      status: string;
+                    }>) {
+                      tStatuses[tp.task_id] = tp.status;
+                    }
+                    setTaskStatuses(tStatuses);
                   }
                 }
 
