@@ -10,13 +10,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { Info, Send } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
+import { Info } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { ChatMessage } from "@/components/ChatMessage";
+import { GoalTracker } from "@/components/GoalTracker";
+import { ChatInput } from "@/components/ChatInput";
 import { StudentContext } from "../../layout";
 
 type Raven = "huginn" | "muninn";
@@ -48,41 +46,6 @@ const XP_HUGINN_SESSION = 50;
 const XP_TOPIC_COMPLETE = 100;
 const BASE_SCORE = 80;
 
-function MessageContent({ content }: { content: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
-      components={{
-        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-        strong: ({ children }) => <strong className="font-semibold text-[#F4F4F5]">{children}</strong>,
-        em: ({ children }) => <em className="italic">{children}</em>,
-        ul: ({ children }) => <ul className="mb-2 ml-4 list-disc last:mb-0">{children}</ul>,
-        ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal last:mb-0">{children}</ol>,
-        li: ({ children }) => <li className="mb-0.5">{children}</li>,
-        code: ({ children, className }) => {
-          const isBlock = className?.includes("language-");
-          if (isBlock) {
-            return (
-              <pre className="my-2 overflow-x-auto rounded-lg bg-[#09070F] p-3 text-xs">
-                <code>{children}</code>
-              </pre>
-            );
-          }
-          return (
-            <code className="rounded bg-[#181525] px-1.5 py-0.5 text-xs font-mono text-[#818CF8]">
-              {children}
-            </code>
-          );
-        },
-        hr: () => <hr className="my-3 border-[rgba(139,92,246,0.08)]" />,
-      }}
-    >
-      {content}
-    </ReactMarkdown>
-  );
-}
-
 function scoreColor(score: number): string {
   if (score >= 80) return "#22C55E";
   if (score >= 50) return "#F59E0B";
@@ -110,7 +73,6 @@ export default function ChatPage() {
   const [currentRaven, setCurrentRaven] = useState<Raven>("huginn");
   const [chatPhase, setChatPhase] = useState<ChatPhase>("huginn");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
@@ -121,7 +83,6 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTextRef = useRef<string>("");
   const sentInitialRef = useRef(false);
@@ -563,39 +524,24 @@ export default function ChatPage() {
     el.scrollTop = el.scrollHeight;
   }, [messages, isLoading]);
 
-  function autoResize(el: HTMLTextAreaElement) {
-    el.style.height = "auto";
-    const max = 4 * 24;
-    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
-  }
-
-  function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setInput(e.target.value);
-    autoResize(e.target);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
-  }
-
-  function submit() {
-    const text = input.trim();
-    if (text.length === 0 || isLoading) return;
-    setInput("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-    }
-    sendMessage(text);
-  }
-
   const showTyping = useMemo(() => {
     if (!isLoading) return false;
     const last = messages[messages.length - 1];
     return last?.role === "assistant" && last.content.length === 0;
   }, [isLoading, messages]);
+
+  const goalProgress = useMemo(() => {
+    const userCount = messages.filter((m) => m.role === "user").length;
+    const PER_GOAL = 2;
+    const out: Record<string, "not_started" | "in_progress" | "mastered"> = {};
+    goals.forEach((goal, i) => {
+      const currentIdx = Math.floor(userCount / PER_GOAL);
+      if (i < currentIdx) out[goal.id] = "mastered";
+      else if (i === currentIdx) out[goal.id] = "in_progress";
+      else out[goal.id] = "not_started";
+    });
+    return out;
+  }, [goals, messages]);
 
   if (bootstrapError) {
     return (
@@ -730,123 +676,15 @@ export default function ChatPage() {
 
   const sidebarContent = (
     <div className="flex h-full flex-col">
-      {/* Шапка сайдбара */}
-      <div className="border-b border-[rgba(139,92,246,0.08)] p-5">
-        <h2 className="text-lg font-bold text-[#F4F4F5]">{topic?.name ?? "Тема"}</h2>
-        <p className="mt-1 text-sm text-[#71717A]">{topic?.section ?? ""}</p>
-
-        {/* Прогресс-бар */}
-        <div className="mt-4">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-xs font-medium text-[#A1A1AA]">Прогресс</span>
-            <span className="font-mono text-xs font-bold text-[#8B5CF6]">
-              0/{goals.length + skills.length}
-            </span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#181525]">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] transition-all duration-500"
-              style={{ width: "0%" }}
-            />
-          </div>
-        </div>
+      <div className="border-b border-[rgba(255,255,255,0.06)] px-5 py-5">
+        <p className="text-[15px] font-bold leading-tight text-[rgba(255,255,255,0.9)]">
+          {topic?.name ?? "Тема"}
+        </p>
+        <p className="mt-1 text-[12px] text-[rgba(255,255,255,0.35)]">
+          {topic?.section ?? ""}
+        </p>
       </div>
-
-      {/* Timeline с шагами */}
-      <div className="flex-1 overflow-y-auto p-5">
-        <div className="relative flex flex-col">
-
-          {/* Цели обучения */}
-          {goals.length > 0 && (
-            <>
-              <div className="mb-3">
-                <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#52525B]">
-                  Цели обучения
-                </span>
-              </div>
-              {goals.map((goal, i) => (
-                <div key={goal.id} className="relative flex gap-3 pb-4">
-                  {/* Вертикальная линия */}
-                  {(i < goals.length - 1 || skills.length > 0) && (
-                    <div className="absolute left-[11px] top-7 bottom-0 w-[2px] bg-[#181525]" />
-                  )}
-                  {/* Индикатор */}
-                  <div className="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 border-[#52525B] bg-[#09070F]">
-                    <div className="h-1.5 w-1.5 rounded-full bg-[#52525B]" />
-                  </div>
-                  {/* Контент */}
-                  <div className="flex-1 rounded-xl border border-[rgba(139,92,246,0.08)] bg-[#09070F] px-3.5 py-3">
-                    <p className="text-sm leading-snug text-[#A1A1AA]">{goal.text}</p>
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
-
-          {/* Разделитель между целями и навыками */}
-          {goals.length > 0 && skills.length > 0 && (
-            <div className="relative mb-3 mt-1 flex items-center gap-3">
-              <div className="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center">
-                <div className="h-[2px] w-3 bg-[#52525B]" />
-              </div>
-              <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#52525B]">
-                Навыки для освоения
-              </span>
-            </div>
-          )}
-
-          {/* Навыки */}
-          {skills.length > 0 && goals.length === 0 && (
-            <div className="mb-3">
-              <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#52525B]">
-                Навыки для освоения
-              </span>
-            </div>
-          )}
-          {skills.map((skill, i) => {
-            const levelColor = skill.level === "продвинутый"
-              ? "#8B5CF6"
-              : skill.level === "олимпиадный"
-              ? "#F59E0B"
-              : "#3B82F6";
-            return (
-              <div key={skill.id} className="relative flex gap-3 pb-4">
-                {/* Вертикальная линия */}
-                {i < skills.length - 1 && (
-                  <div className="absolute left-[11px] top-7 bottom-0 w-[2px] bg-[#181525]" />
-                )}
-                {/* Индикатор с цветом уровня */}
-                <div
-                  className="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 bg-[#09070F]"
-                  style={{ borderColor: levelColor }}
-                >
-                  <div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: levelColor }} />
-                </div>
-                {/* Контент */}
-                <div className="flex-1 rounded-xl border border-[rgba(139,92,246,0.08)] bg-[#09070F] px-3.5 py-3">
-                  <p className="text-sm font-medium leading-snug text-[#F4F4F5]">{skill.text}</p>
-                  <span
-                    className="mt-1 inline-block rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
-                    style={{
-                      color: levelColor,
-                      backgroundColor: `${levelColor}15`,
-                    }}
-                  >
-                    {skill.level}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Пустое состояние */}
-          {goals.length === 0 && skills.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <span className="text-sm text-[#52525B]">Учитель не добавил целей и навыков</span>
-            </div>
-          )}
-        </div>
-      </div>
+      <GoalTracker goals={goals} progress={goalProgress} />
     </div>
   );
 
@@ -877,6 +715,16 @@ export default function ChatPage() {
         >
           ← Назад
         </Link>
+        {chatPhase === "muninn" && (
+          <button
+            type="button"
+            onClick={handleReturnToHuginn}
+            disabled={isLoading || !bootstrapped}
+            className="shrink-0 rounded-lg border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.06)] px-3 py-1.5 text-[12px] font-medium text-[rgba(255,255,255,0.4)] transition-colors hover:text-[rgba(255,255,255,0.7)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            ↩ К теории
+          </button>
+        )}
         <button
           type="button"
           aria-label="Информация о теме"
@@ -905,30 +753,20 @@ export default function ChatPage() {
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-4">
           {messages.map((msg, i) => {
-            if (msg.role === "user") {
-              return (
-                <div key={i} className="flex justify-end">
-                  <div className="max-w-[80%] rounded-[12px_12px_2px_12px] border border-[rgba(139,92,246,0.2)] bg-[rgba(139,92,246,0.15)] px-4 py-2 text-sm text-[#F4F4F5]">
-                    <MessageContent content={msg.content} />
-                  </div>
-                </div>
-              );
-            }
-            if (i === messages.length - 1 && msg.content.length === 0) {
+            if (
+              msg.role === "assistant" &&
+              i === messages.length - 1 &&
+              msg.content.length === 0
+            ) {
               return null;
             }
             return (
-              <div key={i} className="flex items-start gap-2">
-                <div
-                  aria-hidden="true"
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#181525] text-sm"
-                >
-                  {ravenMeta.emoji}
-                </div>
-                <div className="max-w-[80%] rounded-[12px_12px_12px_2px] border border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.04)] px-4 py-2 text-sm text-[#A1A1AA]">
-                  <MessageContent content={msg.content} />
-                </div>
-              </div>
+              <ChatMessage
+                key={i}
+                message={msg}
+                ravenLabel={msg.role === "assistant" ? ravenMeta.label : undefined}
+                ravenColor={msg.role === "assistant" ? ravenMeta.color : undefined}
+              />
             );
           })}
 
@@ -970,41 +808,12 @@ export default function ChatPage() {
         </div>
       </div>
 
-      <div className="sticky bottom-0 border-t border-[rgba(139,92,246,0.08)] bg-[#0F0D17] px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        {chatPhase === "muninn" && (
-          <div className="mb-2 flex justify-start">
-            <button
-              type="button"
-              onClick={handleReturnToHuginn}
-              disabled={isLoading || !bootstrapped}
-              className="text-sm text-[#A1A1AA] transition-colors hover:text-[#F4F4F5] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              ↩ Вернуться к теории
-            </button>
-          </div>
-        )}
-        <div className="flex items-end gap-2">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            placeholder="Напиши сообщение..."
-            disabled={!bootstrapped}
-            className="flex-1 resize-none rounded-lg border border-[rgba(139,92,246,0.08)] bg-[#09070F] px-3 py-2 text-sm text-[#F4F4F5] placeholder:text-[#52525B] focus:border-[rgba(139,92,246,0.25)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-            style={{ maxHeight: "96px" }}
-          />
-          <button
-            type="button"
-            onClick={submit}
-            disabled={isLoading || input.trim().length === 0 || !bootstrapped}
-            aria-label="Отправить"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#8B5CF6] text-white transition-all hover:bg-[#7C3AED] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Send size={16} />
-          </button>
-        </div>
+      <div className="sticky bottom-0 bg-[#0F0D17] pb-[env(safe-area-inset-bottom)]">
+        <ChatInput
+          disabled={isLoading || !bootstrapped}
+          onSend={(text) => sendMessage(text)}
+          placeholder={`Задай вопрос по ${topic?.name ?? "теме"}...`}
+        />
       </div>
       </div>
     </div>
