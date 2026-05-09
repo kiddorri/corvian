@@ -14,6 +14,8 @@ function getSupabase() {
   );
 }
 
+export const maxDuration = 120;
+
 export async function POST(req: Request) {
   try {
     const supabase = getSupabase();
@@ -38,6 +40,16 @@ export async function POST(req: Request) {
 
     for (const pf of parsedFiles) {
       if (pf.base64 && pf.mediaType) {
+        const base64SizeMB = (pf.base64.length * 3) / 4 / 1024 / 1024;
+
+        if (base64SizeMB > 5) {
+          contentBlocks.push({
+            type: "text",
+            text: `[Файл: ${pf.name} — слишком большой для обработки (${base64SizeMB.toFixed(1)} MB), пропущен]`,
+          });
+          continue;
+        }
+
         if (pf.mediaType === "application/pdf") {
           contentBlocks.push({
             type: "document",
@@ -63,9 +75,10 @@ export async function POST(req: Request) {
         }
         contentBlocks.push({ type: "text", text: `[Файл: ${pf.name}]` });
       } else if (pf.text) {
+        const trimmedText = pf.text.slice(0, 10000);
         contentBlocks.push({
           type: "text",
-          text: `[Файл: ${pf.name}]\n\n${pf.text.slice(0, 15000)}`,
+          text: `[Файл: ${pf.name}]\n\n${trimmedText}${pf.text.length > 10000 ? "\n\n[...текст обрезан...]" : ""}`,
         });
       }
     }
@@ -122,11 +135,14 @@ export async function POST(req: Request) {
 - Язык: русский`,
     });
 
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 8192,
-      messages: [{ role: "user", content: contentBlocks }],
-    });
+    const response = await anthropic.messages.create(
+      {
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 8192,
+        messages: [{ role: "user", content: contentBlocks }],
+      },
+      { timeout: 110000 },
+    );
 
     const text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
@@ -155,11 +171,12 @@ export async function POST(req: Request) {
       topics: result.topics,
       fileCount: files.length,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("generate-section error:", error);
-    return NextResponse.json(
-      { error: "Ошибка генерации: " + (error as Error).message },
-      { status: 500 },
-    );
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Неизвестная ошибка сервера";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

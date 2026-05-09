@@ -236,6 +236,19 @@ export default function CalibratePage() {
         method: "POST",
         body: formData,
       });
+
+      if (!res.ok) {
+        let errorMsg = "Ошибка сервера";
+        try {
+          const data = await res.json();
+          errorMsg = data.error || errorMsg;
+        } catch {
+          const text = await res.text();
+          errorMsg = text.slice(0, 200) || `HTTP ${res.status}`;
+        }
+        throw new Error(errorMsg);
+      }
+
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
