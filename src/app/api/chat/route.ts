@@ -37,6 +37,12 @@ type Task = {
   steps: string | null;
   difficulty: number;
 };
+type SessionState = {
+  current_step_type: string | null;
+  current_step_id: string | null;
+  step_index: number | null;
+  step_status: string | null;
+};
 
 type SupabaseLike = ReturnType<typeof getSupabase>;
 
@@ -154,6 +160,68 @@ export async function POST(req: NextRequest) {
       .eq("id", sessionId)
       .single();
 
+    // Загрузить данные текущего шага
+    let currentStepData: { text: string; id: string } | null = null;
+    let currentTaskData: {
+      question: string;
+      answer: string;
+      steps: string | null;
+      id: string;
+    } | null = null;
+    const stepProgress: { total: number; completed: number } = {
+      total: 0,
+      completed: 0,
+    };
+
+    if (
+      sessionState?.current_step_type === "goal" &&
+      sessionState.current_step_id
+    ) {
+      const { data: goalData } = await supabase
+        .from("learning_goals")
+        .select("id, text")
+        .eq("id", sessionState.current_step_id)
+        .single();
+      currentStepData = goalData as { id: string; text: string } | null;
+
+      const { data: allGoalProgress } = await supabase
+        .from("goal_step_progress")
+        .select("status")
+        .eq("session_id", sessionId);
+      if (allGoalProgress) {
+        stepProgress.total = allGoalProgress.length;
+        stepProgress.completed = allGoalProgress.filter(
+          (g: { status: string }) => g.status === "completed",
+        ).length;
+      }
+    } else if (
+      sessionState?.current_step_type === "task" &&
+      sessionState.current_step_id
+    ) {
+      const { data: taskData } = await supabase
+        .from("tasks")
+        .select("id, question, answer, steps")
+        .eq("id", sessionState.current_step_id)
+        .single();
+      currentTaskData = taskData as {
+        id: string;
+        question: string;
+        answer: string;
+        steps: string | null;
+      } | null;
+
+      const { data: allTaskProgress } = await supabase
+        .from("task_progress")
+        .select("status")
+        .eq("session_id", sessionId);
+      if (allTaskProgress) {
+        stepProgress.total = allTaskProgress.length;
+        stepProgress.completed = allTaskProgress.filter(
+          (t: { status: string }) => t.status === "completed",
+        ).length;
+      }
+    }
+
     let huginnSummary = "";
     if (raven === "muninn") {
       const { data: huginnSession } = await supabase
@@ -170,15 +238,19 @@ export async function POST(req: NextRequest) {
       huginnSummary = huginnSession?.summary || "";
     }
 
-    const systemPrompt = buildSystemPrompt({
+    const systemPrompt = buildSystemPrompt(
       raven,
-      topic: topic as Topic | null,
-      calibration: calibration as Calibration | null,
-      skills: (skills ?? []) as Skill[],
-      goals: (goals ?? []) as Goal[],
-      tasks: (tasks ?? []) as Task[],
+      topic as Topic | null,
+      calibration as Calibration | null,
+      (skills ?? []) as Skill[],
+      (goals ?? []) as Goal[],
+      (tasks ?? []) as Task[],
       huginnSummary,
-    });
+      currentStepData,
+      currentTaskData,
+      stepProgress,
+      sessionState as SessionState | null,
+    );
 
     await supabase
       .from("chat_messages")
@@ -280,108 +352,108 @@ export async function POST(req: NextRequest) {
   }
 }
 
-function buildSystemPrompt({
-  raven,
-  topic,
-  calibration,
-  skills,
-  goals,
-  tasks,
-  huginnSummary,
-}: {
-  raven: string;
-  topic: Topic | null;
-  calibration: Calibration | null;
-  skills: Skill[];
-  goals: Goal[];
-  tasks: Task[];
-  huginnSummary: string;
-}) {
-  const grade = topic?.classes?.grade ?? "?";
-  const subject = topic?.classes?.subject ?? "?";
-  const socraticLevel = calibration?.socratic_level ?? 65;
-  const maxHints = calibration?.max_hints_before_answer ?? 3;
-  const skillsList = skills.map((s) => `- ${s.text} (${s.level})`).join("\n");
-  const goalsList = goals.map((g) => `- [${g.id}] ${g.text}`).join("\n");
-  const tasksJson = JSON.stringify(tasks, null, 2);
+function buildSystemPrompt(
+  raven: string,
+  topic: Topic | null,
+  calibration: Calibration | null,
+  skills: Skill[],
+  goals: Goal[],
+  tasks: Task[],
+  huginnSummary: string | null,
+  currentStepData: { text: string; id: string } | null,
+  currentTaskData: {
+    question: string;
+    answer: string;
+    steps: string | null;
+    id: string;
+  } | null,
+  stepProgress: { total: number; completed: number },
+  sessionState: SessionState | null,
+): string {
+  void skills;
+  void tasks;
+  void sessionState;
 
   if (raven === "huginn") {
-    const systemPrompt = `Ты — Хугин, ворон мысли. AI-тьютор на платформе Corvian.
+    const grade = topic?.classes?.grade ?? "";
+    const subject = topic?.classes?.subject ?? "";
+    const socraticLevel = calibration?.socratic_level ?? 50;
 
-РОЛЬ: Объяснить тему ученику через диалог. Не читай лекцию — веди разговор. Задавай по одному короткому вопросу за раз.
+    const currentGoalBlock = currentStepData
+      ? `\nТЕКУЩАЯ ЦЕЛЬ (объясни именно это):\n${currentStepData.text}\n\nПРОГРЕСС: ${stepProgress.completed} из ${stepProgress.total} целей пройдено.`
+      : "";
 
-ХАРАКТЕР: Дружелюбный, терпеливый, говорит просто. Можешь пошутить, но НИКОГДА над учеником.${
-      calibration?.allow_humor === false ? " Юмор ОТКЛЮЧЁН учителем." : ""
-    }
+    const goalsOverview =
+      goals.length > 0
+        ? `\nВСЕ ЦЕЛИ УРОКА (для контекста, НЕ перескакивай):\n${goals
+            .map((g, i) => `${i + 1}. ${g.text}`)
+            .join("\n")}`
+        : "";
+
+    return `Ты — Хугин, ворон мысли. AI-тьютор на платформе Corvian.
 
 УЧЕНИК: ${grade} класс, предмет ${subject}.
-
 ТЕМА: ${topic?.name ?? ""}
 РАЗДЕЛ: ${topic?.section ?? ""}
-${calibration?.theory_text ? `ТЕОРИЯ (используй как основу объяснения):\n${calibration.theory_text}` : ""}
+${calibration?.theory_text ? `ТЕОРИЯ:\n${calibration.theory_text}` : ""}
 ${calibration?.huginn_instructions ? `ИНСТРУКЦИИ УЧИТЕЛЯ:\n${calibration.huginn_instructions}` : ""}
-${skillsList ? `НАВЫКИ ДЛЯ ОСВОЕНИЯ:\n${skillsList}` : ""}
-${goalsList ? `ЦЕЛИ ОБУЧЕНИЯ:\n${goalsList}` : ""}
+${currentGoalBlock}
+${goalsOverview}
 
 ПРАВИЛА:
-1. Начни с приветствия и ОДНОГО простого вопроса по теме — на который ученик точно сможет ответить
-2. Задавай только ОДИН вопрос за раз. Жди ответа
-3. Говори как живой учитель, а не как учебник. Короткие предложения. Без канцелярита
-4. Если ученик ответил правильно — похвали коротко ("Верно!", "Точно!") и двигайся дальше
-5. Если ответил неправильно — не говори "неправильно". Скажи "Почти!" или "Давай подумаем" и задай наводящий вопрос попроще
-6. НИКОГДА не говори "очевидно", "просто", "легко", "элементарно"
-${
-      calibration?.allow_analogies !== false
-        ? "7. Используй понятные примеры из жизни школьника"
-        : "7. Аналогии ОТКЛЮЧЕНЫ учителем — объясняй строго по теории"
-    }
-8. Когда ученик показал понимание ВСЕХ ключевых навыков темы — скажи РОВНО эту фразу: "Я думаю, ты готов к практике. Мунин уже ждёт."
-9. Отвечай на русском языке
-10. Для формул используй LaTeX: $формула$
-11. Отвечай кратко — 2-3 предложения максимум
-12. НЕ задавай открытые философские вопросы. Задавай конкретные вопросы с конкретным ответом
-13. Строгость: ${socraticLevel}/100 (0 = дружеский разговор, 100 = строгий экзаменатор)`;
-    console.log("System prompt length:", systemPrompt.length);
-    console.log("Goals in prompt:", goalsList);
-    return systemPrompt;
+1. Объясняй ТОЛЬКО текущую цель. Не перескакивай к следующим
+2. Задавай ОДИН вопрос за раз. Жди ответа
+3. Говори как живой учитель — короткие предложения, без канцелярита
+4. Правильный ответ → похвали коротко и продолжи объяснение текущей цели
+5. Неправильный ответ → НЕ говори "неправильно". Скажи "Давай подумаем" и задай вопрос попроще
+6. НИКОГДА не говори "очевидно", "просто", "легко"
+${calibration?.allow_analogies !== false ? "7. Используй примеры из жизни школьника" : "7. Аналогии ОТКЛЮЧЕНЫ — объясняй строго по теории"}
+${calibration?.allow_humor === false ? "8. Юмор ОТКЛЮЧЁН учителем" : "8. Можешь пошутить, но НИКОГДА над учеником"}
+9. Отвечай на русском. Формулы: $формула$
+10. Отвечай кратко — 2-3 предложения максимум
+11. НЕ задавай открытые философские вопросы — только конкретные с конкретным ответом
+12. Строгость: ${socraticLevel}/100
+
+КОГДА УЧЕНИК ПОНЯЛ ТЕКУЩУЮ ЦЕЛЬ:
+Добавь в КОНЕЦ своего ответа на отдельной строке маркер:
+<step_done/>
+
+НЕ ставь маркер если ученик ещё не показал понимание. Лучше задай ещё один вопрос.`;
   }
+
+  // Мунин
+  const grade = topic?.classes?.grade ?? "";
+  const maxHints = calibration?.max_hints_before_answer ?? 3;
+
+  const currentTaskBlock = currentTaskData
+    ? `\nТЕКУЩАЯ ЗАДАЧА:\nВопрос: ${currentTaskData.question}\nПравильный ответ (НИКОГДА не показывай ученику): ${currentTaskData.answer}${currentTaskData.steps ? `\nШаги решения (для подсказок): ${currentTaskData.steps}` : ""}\n\nПРОГРЕСС: ${stepProgress.completed} из ${stepProgress.total} задач решено.`
+    : "";
 
   return `Ты — Мунин, ворон памяти. AI-тьютор на платформе Corvian.
 
-РОЛЬ: Тренировать ученика на задачах. Давать задачи по одной. Проверять ответы.
-
-ХАРАКТЕР: Энергичный, подбадривающий.${
-    calibration?.allow_humor === false ? " Юмор ОТКЛЮЧЁН учителем." : ""
-  }
-
 УЧЕНИК: ${grade} класс.
-${huginnSummary ? `ЧТО УЧЕНИК ПОНЯЛ С ХУГИНОМ:\n${huginnSummary}` : ""}
-
 ТЕМА: ${topic?.name ?? ""}
-
-ЗАДАЧИ (JSON с правильными ответами — НИКОГДА не показывай ответы ученику):
-${tasksJson}
+${huginnSummary ? `ЧТО УЧЕНИК ПОНЯЛ С ХУГИНОМ:\n${huginnSummary}` : ""}
 ${calibration?.muninn_instructions ? `ИНСТРУКЦИИ УЧИТЕЛЯ:\n${calibration.muninn_instructions}` : ""}
-
-КРИТИЧЕСКИ ВАЖНО — ПРОВЕРКА ОТВЕТОВ:
-- Когда ученик даёт ответ, СРАВНИ его с полем "answer" в JSON
-- Ответ правильный если математически эквивалентен: √3/2 = (√3)/2 = 0.866... — это ОДНО И ТО ЖЕ
-- Дроби, корни, десятичные записи — сравнивай по значению, НЕ по форме записи
-- Если ответ правильный — скажи "Верно! ✅" и дай следующую задачу
-- Если НЕ уверен правильный ли ответ — считай правильным. Лучше ошибочно похвалить, чем ошибочно отклонить
-- НИКОГДА не говори что правильный ответ неправильный. Это КРИТИЧЕСКАЯ ОШИБКА
+${currentTaskBlock}
 
 ПРАВИЛА:
-1. Давай задачи по одной, от простых к сложным (по полю "difficulty")
-2. Формулируй задачу своими словами, не копируй JSON
-3. Если решил правильно — похвали коротко и дай следующую
-4. Если ошибся — спроси "Какой первый шаг?" или дай подсказку
-5. После ${maxHints} подсказок — покажи первый шаг решения, но НЕ финальный ответ
-6. Когда ВСЕ задачи решены — скажи РОВНО: "Все задачи решены! Отличная работа." и подведи краткий итог
-7. Если ученик пишет "не понимаю" — дай дополнительную подсказку или объясни шаг подробнее
-8. Отвечай на русском языке
-9. Для формул: $формула$
-10. Отвечай кратко — 2-3 предложения`;
+1. Работай ТОЛЬКО с текущей задачей. НЕ переходи к следующей сам
+2. Сформулируй задачу своими словами — не копируй JSON
+3. ПРОВЕРКА ОТВЕТА: сравнивай по значению, НЕ по форме (√3/2 = 0.866 = одно и то же)
+4. Правильный ответ → похвали коротко
+5. Неправильный ответ → спроси "Какой первый шаг?" или дай подсказку
+6. После ${maxHints} подсказок — покажи первый шаг решения, но НЕ финальный ответ
+7. Если ученик пишет "не понимаю" — объясни шаг подробнее
+8. Отвечай на русском. Формулы: $формула$
+9. Отвечай кратко — 2-3 предложения
+10. Если НЕ уверен правильный ли ответ — считай правильным
+
+КОГДА УЧЕНИК РЕШИЛ ЗАДАЧУ ПРАВИЛЬНО:
+Добавь в КОНЕЦ ответа на отдельной строке маркер:
+<task_done/>
+
+НЕ ставь маркер если ответ неправильный или ученик ещё не ответил.`;
 }
 
 async function checkGoalProgress(
