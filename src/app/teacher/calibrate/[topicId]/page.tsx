@@ -21,6 +21,7 @@ type Topic = {
   section: string;
   class_id: string;
   is_calibrated: boolean;
+  classes?: { grade: number; subject: string } | null;
 };
 
 type Calibration = {
@@ -195,7 +196,7 @@ export default function CalibrateTopicPage() {
   const [theoryError, setTheoryError] = useState<string | null>(null);
 
   // Lesson generation state
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [generating, setGenerating] = useState(false);
   const [generatedPlan, setGeneratedPlan] = useState<{
     theory: string;
@@ -266,7 +267,7 @@ export default function CalibrateTopicPage() {
 
       const { data: topicData, error: topicError } = await supabase
         .from("topics")
-        .select("*")
+        .select("*, classes(grade, subject)")
         .eq("id", topicId)
         .single();
 
@@ -388,16 +389,18 @@ export default function CalibrateTopicPage() {
   }
 
   async function handleGenerateLesson() {
-    if (!uploadedFile || !topic) return;
+    if (uploadedFiles.length === 0 || !topic) return;
     setGenerating(true);
     try {
       const formData = new FormData();
-      formData.append("file", uploadedFile);
+      formData.append("topicId", topicId as string);
       formData.append("topicName", topic.name);
       formData.append("topicSection", topic.section);
-      formData.append("grade", "10");
-      formData.append("subject", "Математика");
-      formData.append("topicId", topicId as string);
+      formData.append("grade", String(topic.classes?.grade ?? ""));
+      formData.append("subject", topic.classes?.subject ?? "");
+      for (const file of uploadedFiles) {
+        formData.append("files", file);
+      }
 
       const res = await fetch("/api/generate-lesson", {
         method: "POST",
@@ -411,25 +414,24 @@ export default function CalibrateTopicPage() {
       }
 
       setGeneratedPlan(data.plan);
-      setTheoryText(data.plan.theory);
-      const stepsText = data.plan.huginn_steps
-        .map(
-          (
-            step: {
-              explanation: string;
-              question: string;
-              correct_answer: string;
-              hint: string;
-            },
-            i: number,
-          ) =>
-            `ШАГ ${i + 1}:\nОбъясни: ${step.explanation}\nСпроси: ${step.question}\nПравильный ответ: ${step.correct_answer}\nПодсказка: ${step.hint}`,
-        )
-        .join("\n\n");
-      setHuginnInstructions(
-        "ПЛАН УРОКА (веди ученика по шагам, задавай вопросы по одному):\n\n" +
-          stepsText,
-      );
+      if (data.plan.theory) setTheoryText(data.plan.theory);
+      if (Array.isArray(data.plan.huginn_steps)) {
+        const instructions = data.plan.huginn_steps
+          .map(
+            (
+              s: {
+                explanation: string;
+                question: string;
+                correct_answer: string;
+                hint: string;
+              },
+              i: number,
+            ) =>
+              `ШАГ ${i + 1}:\nОбъясни: ${s.explanation}\nСпроси: ${s.question}\nПравильный ответ: ${s.correct_answer}\nПодсказка: ${s.hint}`,
+          )
+          .join("\n\n");
+        setHuginnInstructions(instructions);
+      }
     } catch (err) {
       alert(
         "Ошибка генерации: " +
@@ -813,21 +815,25 @@ export default function CalibrateTopicPage() {
 
                   <div className="flex items-center gap-3">
                     <label className="cursor-pointer rounded-lg border border-[rgba(139,92,246,0.15)] bg-[#0F0D17] px-4 py-2 text-sm text-[#A1A1AA] transition-colors hover:border-[rgba(139,92,246,0.25)] hover:text-[#F4F4F5]">
-                      {uploadedFile ? uploadedFile.name : "Выбрать файл"}
+                      {uploadedFiles.length > 0
+                        ? `${uploadedFiles.length} файл(ов) выбрано`
+                        : "Выбрать файлы"}
                       <input
                         type="file"
-                        accept=".pdf,.png,.jpg,.jpeg,.pptx"
+                        accept=".pdf,.png,.jpg,.jpeg,.pptx,.docx,.txt,.md"
+                        multiple
                         className="hidden"
-                        onChange={(e) =>
-                          setUploadedFile(e.target.files?.[0] ?? null)
-                        }
+                        onChange={(e) => {
+                          const newFiles = Array.from(e.target.files ?? []);
+                          setUploadedFiles((prev) => [...prev, ...newFiles]);
+                        }}
                       />
                     </label>
 
                     <button
                       type="button"
                       onClick={handleGenerateLesson}
-                      disabled={!uploadedFile || generating}
+                      disabled={uploadedFiles.length === 0 || generating}
                       className="rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] px-4 py-2 text-sm font-medium text-white transition-opacity disabled:opacity-40"
                     >
                       {generating
@@ -836,11 +842,31 @@ export default function CalibrateTopicPage() {
                     </button>
                   </div>
 
-                  {uploadedFile && (
-                    <p className="mt-2 text-xs text-[#52525B]">
-                      {(uploadedFile.size / 1024 / 1024).toFixed(1)} MB ·{" "}
-                      {uploadedFile.type}
-                    </p>
+                  {uploadedFiles.length > 0 && (
+                    <div className="mt-3 space-y-1">
+                      {uploadedFiles.map((f, i) => (
+                        <div
+                          key={i}
+                          className="flex items-center gap-2 text-xs text-[#A1A1AA]"
+                        >
+                          <span>
+                            {f.name} ({(f.size / 1024 / 1024).toFixed(1)} MB)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setUploadedFiles((prev) =>
+                                prev.filter((_, j) => j !== i),
+                              )
+                            }
+                            className="text-red-400 hover:text-red-300"
+                            aria-label="Удалить файл"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
 
