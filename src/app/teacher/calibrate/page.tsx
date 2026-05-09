@@ -76,6 +76,7 @@ export default function CalibratePage() {
   const [bulkFiles, setBulkFiles] = useState<File[]>([]);
   const [bulkSectionName, setBulkSectionName] = useState("");
   const [bulkGenerating, setBulkGenerating] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState("");
   const [bulkPlan, setBulkPlan] = useState<BulkPlan | null>(null);
   const [bulkApplying, setBulkApplying] = useState(false);
 
@@ -219,6 +220,7 @@ export default function CalibratePage() {
     )
       return;
     setBulkGenerating(true);
+    setBulkProgress("Загружаю файлы на сервер...");
 
     try {
       const selectedClass = classes.find((c) => c.id === selectedClassId);
@@ -231,6 +233,8 @@ export default function CalibratePage() {
       for (const file of bulkFiles) {
         formData.append("files", file);
       }
+
+      setBulkProgress(`Отправляю ${bulkFiles.length} файлов AI для анализа...`);
 
       const res = await fetch("/api/generate-section", {
         method: "POST",
@@ -252,11 +256,13 @@ export default function CalibratePage() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
+      setBulkProgress("Готово!");
       setBulkPlan(data as BulkPlan);
     } catch (err) {
       alert("Ошибка: " + (err instanceof Error ? err.message : "неизвестная"));
     } finally {
       setBulkGenerating(false);
+      setBulkProgress("");
     }
   }
 
@@ -591,20 +597,33 @@ export default function CalibratePage() {
                   </div>
                 )}
 
-                <button
-                  type="button"
-                  onClick={handleBulkGenerate}
-                  disabled={
-                    !bulkSectionName.trim() ||
-                    bulkFiles.length === 0 ||
-                    bulkGenerating
-                  }
-                  className="w-full rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] px-4 py-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
-                >
-                  {bulkGenerating
-                    ? "AI анализирует материалы..."
-                    : `✨ Разбить на темы (${bulkFiles.length} файлов)`}
-                </button>
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleBulkGenerate}
+                    disabled={
+                      !bulkSectionName.trim() ||
+                      bulkFiles.length === 0 ||
+                      bulkGenerating
+                    }
+                    className="w-full rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] px-4 py-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
+                  >
+                    {bulkGenerating
+                      ? "AI анализирует материалы..."
+                      : `✨ Разбить на темы (${bulkFiles.length} файлов)`}
+                  </button>
+
+                  {bulkGenerating && (
+                    <div className="mt-3">
+                      <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-[#1A1625]">
+                        <div className="h-full rounded-full bg-gradient-to-r from-[#7C3AED] via-[#A78BFA] to-[#7C3AED] bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite]" />
+                      </div>
+                      <p className="text-center text-xs text-[#71717A]">
+                        {bulkProgress || "Подождите..."}
+                      </p>
+                    </div>
+                  )}
+                </div>
               </>
             ) : (
               <>
