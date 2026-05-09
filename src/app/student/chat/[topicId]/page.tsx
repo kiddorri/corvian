@@ -39,9 +39,6 @@ const HUGINN_GREETING = "Привет! Я готов изучать эту те�
 const MUNINN_GREETING =
   "Привет, Мунин! Я прошёл теорию с Хугином и готов к задачам.";
 
-const HUGINN_DONE_PHRASE = "Мунин уже ждёт";
-const MUNINN_DONE_PHRASE = "Все задачи решены";
-
 const XP_HUGINN_SESSION = 50;
 const XP_TOPIC_COMPLETE = 100;
 const BASE_SCORE = 80;
@@ -327,29 +324,40 @@ export default function ChatPage() {
                   return updated;
                 });
               }
-              if (
-                data.done &&
-                Array.isArray(data.goalsDone) &&
-                data.goalsDone.length > 0 &&
-                student
-              ) {
-                const sb = createClient();
-                const newStatuses = { ...goalStatuses };
-                for (const goalId of data.goalsDone as string[]) {
-                  if (newStatuses[goalId] !== "mastered") {
-                    newStatuses[goalId] = "mastered";
-                    await sb.from("goal_progress").upsert(
-                      {
-                        student_id: student.id,
-                        goal_id: goalId,
-                        status: "mastered",
-                        updated_at: new Date().toISOString(),
-                      },
-                      { onConflict: "student_id,goal_id" },
-                    );
+              if (data.done) {
+                if (
+                  Array.isArray(data.goalsDone) &&
+                  data.goalsDone.length > 0 &&
+                  student
+                ) {
+                  const sb = createClient();
+                  const newStatuses = { ...goalStatuses };
+                  for (const goalId of data.goalsDone as string[]) {
+                    if (newStatuses[goalId] !== "mastered") {
+                      newStatuses[goalId] = "mastered";
+                      await sb.from("goal_progress").upsert(
+                        {
+                          student_id: student.id,
+                          goal_id: goalId,
+                          status: "mastered",
+                          updated_at: new Date().toISOString(),
+                        },
+                        { onConflict: "student_id,goal_id" },
+                      );
+                    }
+                  }
+                  setGoalStatuses(newStatuses);
+                }
+
+                if (data.stepFinished) {
+                  if (rv === "huginn") {
+                    handleHuginnComplete();
+                  } else if (rv === "muninn") {
+                    handleMuninComplete();
                   }
                 }
-                setGoalStatuses(newStatuses);
+
+                break;
               }
             } catch {
               // ignore malformed line
@@ -376,13 +384,6 @@ export default function ChatPage() {
       setIsLoading(false);
 
       if (errored) return;
-
-      // Detect phase transitions based on raven response
-      if (rv === "huginn" && assistant.includes(HUGINN_DONE_PHRASE)) {
-        handleHuginnComplete();
-      } else if (rv === "muninn" && assistant.includes(MUNINN_DONE_PHRASE)) {
-        handleMuninComplete();
-      }
     },
     [
       student,
