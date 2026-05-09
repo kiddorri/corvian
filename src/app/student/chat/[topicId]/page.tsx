@@ -325,6 +325,32 @@ export default function ChatPage() {
                 });
               }
               if (data.done) {
+                if (data.stepAdvanced && rv === "huginn" && sid) {
+                  const sb = createClient();
+                  const { data: updatedProgress } = await sb
+                    .from("goal_step_progress")
+                    .select("goal_id, status")
+                    .eq("session_id", sid);
+                  if (updatedProgress) {
+                    const newStatuses: Record<
+                      string,
+                      "not_started" | "in_progress" | "mastered"
+                    > = {};
+                    for (const gp of updatedProgress as Array<{
+                      goal_id: string;
+                      status: string;
+                    }>) {
+                      newStatuses[gp.goal_id] =
+                        gp.status === "completed"
+                          ? "mastered"
+                          : gp.status === "pending"
+                            ? "not_started"
+                            : "in_progress";
+                    }
+                    setGoalStatuses(newStatuses);
+                  }
+                }
+
                 if (data.stepFinished) {
                   if (rv === "huginn") {
                     handleHuginnComplete();

@@ -78,6 +78,14 @@ async function initSessionSteps(
         })
         .eq("id", sessionId);
     }
+
+    if (!goals || goals.length === 0) {
+      // Нет целей — Хугин сразу "завершён", переход к Мунину
+      await supabase
+        .from("chat_sessions")
+        .update({ step_status: "completed" })
+        .eq("id", sessionId);
+    }
   } else if (raven === "muninn") {
     const { data: tasks } = await supabase
       .from("tasks")
@@ -102,6 +110,13 @@ async function initSessionSteps(
           step_index: 0,
           step_status: "teaching",
         })
+        .eq("id", sessionId);
+    }
+
+    if (!tasks || tasks.length === 0) {
+      await supabase
+        .from("chat_sessions")
+        .update({ step_status: "completed" })
         .eq("id", sessionId);
     }
   }
@@ -256,6 +271,45 @@ export async function POST(req: NextRequest) {
       .eq("id", sessionId)
       .single();
 
+    // Если шаги уже завершены (тема без целей или без задач) — сразу stepFinished
+    if (
+      sessionState?.step_status === "completed" &&
+      (!history || history.length === 0)
+    ) {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                text:
+                  raven === "huginn"
+                    ? "У этой темы нет отдельных целей для изучения. Переходим к практике!"
+                    : "У этой темы нет задач.",
+              })}\n\n`,
+            ),
+          );
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                done: true,
+                stepAdvanced: false,
+                stepFinished: true,
+              })}\n\n`,
+            ),
+          );
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
+      });
+    }
+
     // Загрузить данные текущего шага
     let currentStepData: { text: string; id: string } | null = null;
     let currentTaskData: {
@@ -375,6 +429,8 @@ export async function POST(req: NextRequest) {
 
     const encoder = new TextEncoder();
     let fullResponse = "";
+    let streamBuffer = "";
+    const MARKER_MAX_LEN = 12; // длина "<step_done/>" и "<task_done/>"
 
     const readable = new ReadableStream({
       async start(controller) {
@@ -384,19 +440,41 @@ export async function POST(req: NextRequest) {
               event.type === "content_block_delta" &&
               event.delta.type === "text_delta"
             ) {
-              const text = event.delta.text;
-              fullResponse += text;
-              const cleanChunk = text
-                .replace(/<step_done\/>/g, "")
-                .replace(/<task_done\/>/g, "");
-              if (cleanChunk) {
-                controller.enqueue(
-                  encoder.encode(
-                    `data: ${JSON.stringify({ text: cleanChunk })}\n\n`,
-                  ),
-                );
+              const chunk = event.delta.text;
+              fullResponse += chunk;
+              streamBuffer += chunk;
+
+              const safeEnd = streamBuffer.length - MARKER_MAX_LEN;
+              if (safeEnd > 0) {
+                const toSend = streamBuffer.slice(0, safeEnd);
+                streamBuffer = streamBuffer.slice(safeEnd);
+                const cleaned = toSend
+                  .replace(/<step_done\/>/g, "")
+                  .replace(/<task_done\/>/g, "");
+                if (cleaned) {
+                  controller.enqueue(
+                    encoder.encode(
+                      `data: ${JSON.stringify({ text: cleaned })}\n\n`,
+                    ),
+                  );
+                }
               }
             }
+          }
+
+          // Сбросить остаток буфера
+          if (streamBuffer) {
+            const cleaned = streamBuffer
+              .replace(/<step_done\/>/g, "")
+              .replace(/<task_done\/>/g, "");
+            if (cleaned) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ text: cleaned })}\n\n`,
+                ),
+              );
+            }
+            streamBuffer = "";
           }
 
           clearTimeout(timeout);
