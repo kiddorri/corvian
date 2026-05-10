@@ -298,6 +298,28 @@ export default function ChatPage() {
             if (!line.startsWith("data: ")) continue;
             try {
               const data = JSON.parse(line.slice(6));
+              if (data.newBubble) {
+                // Финализируем текущий пузырь и создаём новый для вариации
+                if (throttleRef.current) {
+                  clearTimeout(throttleRef.current);
+                  throttleRef.current = null;
+                }
+                const finalizedFirst = assistant;
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = {
+                    role: "assistant" as const,
+                    content: finalizedFirst,
+                  };
+                  return [
+                    ...updated,
+                    { role: "assistant" as const, content: "" },
+                  ];
+                });
+                assistant = "";
+                pendingTextRef.current = "";
+                continue;
+              }
               if (data.text) {
                 assistant += data.text;
                 pendingTextRef.current = assistant;

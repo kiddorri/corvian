@@ -10,6 +10,8 @@ import {
 } from "@/lib/services/lesson-engine";
 import { generateTaskVariation } from "@/lib/services/task-generator";
 
+export const maxDuration = 60;
+
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
@@ -335,7 +337,6 @@ export async function POST(req: NextRequest) {
             finished: boolean;
             nextStepId: string | null;
           } = { advanced: false, finished: false, nextStepId: null };
-          let variationReady = false;
 
           if (hasStepDone || hasTaskDone) {
             const userMsgCount =
@@ -380,8 +381,113 @@ export async function POST(req: NextRequest) {
                       role: "system",
                       content: "VARIATION:" + JSON.stringify(variation),
                     });
-                    variationReady = true;
-                    // НЕ advance — следующее сообщение Мунин даст вариацию
+
+                    // --- Второй стрим: Мунин выдаёт вариацию ---
+                    try {
+                      controller.enqueue(
+                        encoder.encode(
+                          `data: ${JSON.stringify({ newBubble: true })}\n\n`,
+                        ),
+                      );
+
+                      const variationPrompt = buildSystemPrompt({
+                        raven: "muninn",
+                        topic: topic as Topic | null,
+                        calibration: calibration as Calibration | null,
+                        goals: (goals ?? []) as Goal[],
+                        currentGoal: null,
+                        currentTask: {
+                          id: currentTaskData.id,
+                          question: variation.question,
+                          answer: variation.answer,
+                          steps: null,
+                        },
+                        stepProgress,
+                        huginnSummary: huginnSummary || undefined,
+                        isVariation: true,
+                      });
+
+                      const variationMessages = [
+                        ...messages,
+                        {
+                          role: "assistant" as const,
+                          content: cleanedResponse,
+                        },
+                        { role: "user" as const, content: "продолжай" },
+                      ];
+
+                      const variationStream = anthropic.messages.stream(
+                        {
+                          model: "claude-haiku-4-5-20251001",
+                          max_tokens: 1024,
+                          system: variationPrompt,
+                          messages: variationMessages,
+                        },
+                        { timeout: 20000 },
+                      );
+
+                      const parser2 = new StreamParser();
+
+                      for await (const event of variationStream) {
+                        if (
+                          event.type === "content_block_delta" &&
+                          event.delta.type === "text_delta"
+                        ) {
+                          const cleaned = parser2.processChunk(
+                            event.delta.text,
+                          );
+                          if (cleaned) {
+                            controller.enqueue(
+                              encoder.encode(
+                                `data: ${JSON.stringify({ text: cleaned })}\n\n`,
+                              ),
+                            );
+                          }
+                        }
+                      }
+
+                      const remaining2 = parser2.flush();
+                      if (remaining2) {
+                        controller.enqueue(
+                          encoder.encode(
+                            `data: ${JSON.stringify({ text: remaining2 })}\n\n`,
+                          ),
+                        );
+                      }
+
+                      const variationText = parser2.getCleanedResponse();
+                      if (variationText) {
+                        await supabase.from("chat_messages").insert({
+                          session_id: sessionId,
+                          role: "assistant",
+                          content: variationText,
+                        });
+                      }
+
+                      // task_done во втором стриме крайне маловероятен (модель сама не отвечает за ученика),
+                      // но если случилось — удалить маркер вариации и advance
+                      if (parser2.hasTaskDone() && msgsOnStep >= 2) {
+                        await supabase
+                          .from("chat_messages")
+                          .delete()
+                          .eq("session_id", sessionId)
+                          .eq("role", "system")
+                          .ilike("content", "VARIATION:%");
+                        stepResult = await advanceStep(
+                          supabase,
+                          sessionId,
+                          topicId,
+                          raven,
+                          sessionState as SessionState | null,
+                        );
+                      }
+                    } catch (streamErr) {
+                      console.error(
+                        "Variation second stream failed:",
+                        streamErr,
+                      );
+                      // VARIATION-маркер сохранён, не advance — следующий запрос ученика получит вариацию
+                    }
                   } catch (err) {
                     console.error("Variation generation failed:", err);
                     stepResult = await advanceStep(
@@ -449,7 +555,6 @@ export async function POST(req: NextRequest) {
                 done: true,
                 stepAdvanced: stepResult.advanced,
                 stepFinished: stepResult.finished,
-                variationReady,
               })}\n\n`,
             ),
           );
