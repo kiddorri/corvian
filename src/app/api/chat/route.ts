@@ -253,7 +253,10 @@ export async function POST(req: NextRequest) {
       currentTask: promptCurrentTask,
       stepProgress,
       huginnSummary: huginnSummary || undefined,
-      isVariation: !!activeVariation,
+      // Main stream is for checking the student's answer (the variation was
+      // already presented via the second stream on the prior turn). Never
+      // re-tell the model to "give the variation" here.
+      isVariation: false,
     });
 
     await supabase
@@ -369,9 +372,12 @@ export async function POST(req: NextRequest) {
               sessionState?.step_index,
             );
 
+            const isTaskContext =
+              sessionState?.current_step_type === "task" ||
+              raven === "muninn";
             if (
               msgsOnStep >= 2 ||
-              (hasTaskDone && sessionState?.current_step_type === "task")
+              (hasTaskDone && isTaskContext)
             ) {
               console.log(
                 "[GATE] passed msgsOnStep gate. hasTaskDone:",
@@ -380,11 +386,10 @@ export async function POST(req: NextRequest) {
                 hasStepDone,
                 "msgsOnStep:",
                 msgsOnStep,
+                "isTaskContext:",
+                isTaskContext,
               );
-              if (
-                hasTaskDone &&
-                sessionState?.current_step_type === "task"
-              ) {
+              if (hasTaskDone && isTaskContext) {
                 console.log(
                   "[MARKER] activeVariation:",
                   !!activeVariation,

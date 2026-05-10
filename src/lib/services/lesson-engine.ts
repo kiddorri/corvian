@@ -24,60 +24,23 @@ export async function initSessionSteps(
       .order("sort_order", { ascending: true });
 
     if (goals && goals.length > 0) {
-      // Проверить есть ли предыдущая Хугин-сессия с прогрессом
-      const { data: prevSessions } = await supabase
-        .from("chat_sessions")
-        .select("id")
-        .eq("topic_id", topicId)
-        .eq("raven", "huginn")
-        .neq("id", sessionId)
-        .not("ended_at", "is", null)
-        .order("ended_at", { ascending: false })
-        .limit(1);
-
-      let completedGoalIds: string[] = [];
-      if (prevSessions && prevSessions.length > 0) {
-        const { data: prevProgress } = await supabase
-          .from("goal_step_progress")
-          .select("goal_id, status")
-          .eq("session_id", prevSessions[0].id)
-          .eq("status", "completed");
-        if (prevProgress) {
-          completedGoalIds = (
-            prevProgress as Array<{ goal_id: string }>
-          ).map((p) => p.goal_id);
-        }
-      }
-
       await supabase.from("goal_step_progress").insert(
         goals.map((g: { id: string }) => ({
           session_id: sessionId,
           goal_id: g.id,
-          status: completedGoalIds.includes(g.id) ? "completed" : "pending",
+          status: "pending",
         })),
       );
 
-      const firstPendingIndex = (
-        goals as Array<{ id: string }>
-      ).findIndex((g) => !completedGoalIds.includes(g.id));
-
-      if (firstPendingIndex >= 0) {
-        const firstPendingGoal = goals[firstPendingIndex] as { id: string };
-        await supabase
-          .from("chat_sessions")
-          .update({
-            current_step_type: "goal",
-            current_step_id: firstPendingGoal.id,
-            step_index: firstPendingIndex,
-            step_status: "teaching",
-          })
-          .eq("id", sessionId);
-      } else {
-        await supabase
-          .from("chat_sessions")
-          .update({ step_status: "completed" })
-          .eq("id", sessionId);
-      }
+      await supabase
+        .from("chat_sessions")
+        .update({
+          current_step_type: "goal",
+          current_step_id: (goals[0] as { id: string }).id,
+          step_index: 0,
+          step_status: "teaching",
+        })
+        .eq("id", sessionId);
     } else {
       // Нет целей — Хугин сразу "завершён", переход к Мунину
       await supabase
