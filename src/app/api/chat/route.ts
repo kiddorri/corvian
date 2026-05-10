@@ -348,7 +348,9 @@ export async function POST(req: NextRequest) {
             nextStepId: string | null;
           } = { advanced: false, finished: false, nextStepId: null };
 
+          try {
           if (hasStepDone || hasTaskDone) {
+            console.log("[GATE] marker detected, computing msgsOnStep");
             const userMsgCount =
               (history ?? []).filter(
                 (m: { role: string }) => m.role === "user",
@@ -371,6 +373,14 @@ export async function POST(req: NextRequest) {
               msgsOnStep >= 2 ||
               (hasTaskDone && sessionState?.current_step_type === "task")
             ) {
+              console.log(
+                "[GATE] passed msgsOnStep gate. hasTaskDone:",
+                hasTaskDone,
+                "hasStepDone:",
+                hasStepDone,
+                "msgsOnStep:",
+                msgsOnStep,
+              );
               if (
                 hasTaskDone &&
                 sessionState?.current_step_type === "task"
@@ -579,6 +589,9 @@ export async function POST(req: NextRequest) {
                   );
                 }
               } else {
+                console.log(
+                  "[GATE] not task_done or not task type, checking step_done",
+                );
                 // Хугин step_done → advance напрямую
                 stepResult = await advanceStep(
                   supabase,
@@ -695,6 +708,9 @@ export async function POST(req: NextRequest) {
               }
             }
             // Если msgsOnStep < 2 — игнорируем маркер: ученик не мог понять за 1 сообщение
+          }
+          } catch (markerErr) {
+            console.error("[MARKER-ERROR] uncaught:", markerErr);
           }
 
           // Fallback: если модель не поставила маркер за 8+ user-сообщений по одному шагу — форсировать продвижение
