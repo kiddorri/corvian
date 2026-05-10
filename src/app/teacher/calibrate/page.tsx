@@ -750,14 +750,14 @@ export default function CalibratePage() {
                   <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed border-[rgba(139,92,246,0.2)] bg-[#09070F] p-8 transition-colors hover:border-[rgba(139,92,246,0.3)]">
                     <span className="text-2xl">📄</span>
                     <span className="text-sm text-[#A1A1AA]">
-                      Нажмите или перетащите файлы
+                      Нажмите чтобы загрузить файлы
                     </span>
                     <span className="text-xs text-[#52525B]">
-                      PDF, DOCX, PPTX, изображения
+                      PDF файлы
                     </span>
                     <input
                       type="file"
-                      accept=".pdf,.png,.jpg,.jpeg,.pptx,.docx,.txt,.md"
+                      accept=".pdf"
                       multiple
                       className="hidden"
                       onChange={(e) => {

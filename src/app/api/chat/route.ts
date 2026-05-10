@@ -8,6 +8,9 @@ import {
   advanceStep,
   type SessionState,
 } from "@/lib/services/lesson-engine";
+import { generateTaskVariation } from "@/lib/services/task-generator";
+
+export const maxDuration = 60;
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -197,26 +200,74 @@ export async function POST(req: NextRequest) {
       huginnSummary = huginnSession?.summary || "";
     }
 
+    // Активная вариация задачи (хранится как system-сообщение в chat_messages)
+    let activeVariation: { question: string; answer: string } | null = null;
+    if (sessionState?.current_step_type === "task") {
+      const { data: variationMsg } = await supabase
+        .from("chat_messages")
+        .select("content")
+        .eq("session_id", sessionId)
+        .eq("role", "system")
+        .ilike("content", "VARIATION:%")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (variationMsg) {
+        try {
+          const raw = (variationMsg as { content: string }).content;
+          const parsed = JSON.parse(raw.replace(/^VARIATION:/, ""));
+          if (
+            parsed &&
+            typeof parsed.question === "string" &&
+            typeof parsed.answer === "string"
+          ) {
+            activeVariation = {
+              question: parsed.question,
+              answer: parsed.answer,
+            };
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+    }
+
+    // Если есть активная вариация — подменяем данные задачи в промпте
+    const promptCurrentTask =
+      activeVariation && currentTaskData
+        ? {
+            id: currentTaskData.id,
+            question: activeVariation.question,
+            answer: activeVariation.answer,
+            steps: null,
+          }
+        : currentTaskData;
+
     const systemPrompt = buildSystemPrompt({
       raven,
       topic: topic as Topic | null,
       calibration: calibration as Calibration | null,
       goals: (goals ?? []) as Goal[],
       currentGoal: currentStepData,
-      currentTask: currentTaskData,
+      currentTask: promptCurrentTask,
       stepProgress,
       huginnSummary: huginnSummary || undefined,
+      isVariation: !!activeVariation,
     });
 
     await supabase
       .from("chat_messages")
       .insert({ session_id: sessionId, role: "user", content: message });
 
+    // В messages для Anthropic API передаём только user/assistant (system-маркеры вариаций не нужны модели)
     const messages = [
-      ...((history ?? []) as { role: string; content: string }[]).map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })),
+      ...((history ?? []) as { role: string; content: string }[])
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        })),
       { role: "user" as const, content: message },
     ];
 
@@ -297,19 +348,168 @@ export async function POST(req: NextRequest) {
             const msgsOnStep = userMsgCount - estimatedBefore;
 
             if (msgsOnStep >= 2) {
-              let shouldAdvance = true;
-
-              // Мунин: первый <task_done/> → модель даёт вариацию в том же сообщении.
-              // Не advance, пока ученик не решит вариацию (второй <task_done/> уже без "Для закрепления").
               if (
                 hasTaskDone &&
-                sessionState?.current_step_type === "task" &&
-                cleanedResponse.includes("Для закрепления")
+                sessionState?.current_step_type === "task"
               ) {
-                shouldAdvance = false;
-              }
+                if (activeVariation) {
+                  // Вариация решена — удалить маркер и advance
+                  await supabase
+                    .from("chat_messages")
+                    .delete()
+                    .eq("session_id", sessionId)
+                    .eq("role", "system")
+                    .ilike("content", "VARIATION:%");
 
-              if (shouldAdvance) {
+                  stepResult = await advanceStep(
+                    supabase,
+                    sessionId,
+                    topicId,
+                    raven,
+                    sessionState as SessionState | null,
+                  );
+                } else if (currentTaskData && topic) {
+                  // Оригинальная задача решена — генерируем вариацию через Sonnet
+                  try {
+                    const variation = await generateTaskVariation(
+                      currentTaskData.question,
+                      currentTaskData.answer,
+                      (topic as Topic).name,
+                    );
+                    await supabase.from("chat_messages").insert({
+                      session_id: sessionId,
+                      role: "system",
+                      content: "VARIATION:" + JSON.stringify(variation),
+                    });
+
+                    // --- Второй стрим: Мунин выдаёт вариацию ---
+                    try {
+                      controller.enqueue(
+                        encoder.encode(
+                          `data: ${JSON.stringify({ newBubble: true })}\n\n`,
+                        ),
+                      );
+
+                      const variationPrompt = buildSystemPrompt({
+                        raven: "muninn",
+                        topic: topic as Topic | null,
+                        calibration: calibration as Calibration | null,
+                        goals: (goals ?? []) as Goal[],
+                        currentGoal: null,
+                        currentTask: {
+                          id: currentTaskData.id,
+                          question: variation.question,
+                          answer: variation.answer,
+                          steps: null,
+                        },
+                        stepProgress,
+                        huginnSummary: huginnSummary || undefined,
+                        isVariation: true,
+                      });
+
+                      const variationMessages = [
+                        ...messages,
+                        {
+                          role: "assistant" as const,
+                          content: cleanedResponse,
+                        },
+                        { role: "user" as const, content: "продолжай" },
+                      ];
+
+                      const variationStream = anthropic.messages.stream(
+                        {
+                          model: "claude-haiku-4-5-20251001",
+                          max_tokens: 1024,
+                          system: variationPrompt,
+                          messages: variationMessages,
+                        },
+                        { timeout: 20000 },
+                      );
+
+                      const parser2 = new StreamParser();
+
+                      for await (const event of variationStream) {
+                        if (
+                          event.type === "content_block_delta" &&
+                          event.delta.type === "text_delta"
+                        ) {
+                          const cleaned = parser2.processChunk(
+                            event.delta.text,
+                          );
+                          if (cleaned) {
+                            controller.enqueue(
+                              encoder.encode(
+                                `data: ${JSON.stringify({ text: cleaned })}\n\n`,
+                              ),
+                            );
+                          }
+                        }
+                      }
+
+                      const remaining2 = parser2.flush();
+                      if (remaining2) {
+                        controller.enqueue(
+                          encoder.encode(
+                            `data: ${JSON.stringify({ text: remaining2 })}\n\n`,
+                          ),
+                        );
+                      }
+
+                      const variationText = parser2.getCleanedResponse();
+                      if (variationText) {
+                        await supabase.from("chat_messages").insert({
+                          session_id: sessionId,
+                          role: "assistant",
+                          content: variationText,
+                        });
+                      }
+
+                      // task_done во втором стриме крайне маловероятен (модель сама не отвечает за ученика),
+                      // но если случилось — удалить маркер вариации и advance
+                      if (parser2.hasTaskDone() && msgsOnStep >= 2) {
+                        await supabase
+                          .from("chat_messages")
+                          .delete()
+                          .eq("session_id", sessionId)
+                          .eq("role", "system")
+                          .ilike("content", "VARIATION:%");
+                        stepResult = await advanceStep(
+                          supabase,
+                          sessionId,
+                          topicId,
+                          raven,
+                          sessionState as SessionState | null,
+                        );
+                      }
+                    } catch (streamErr) {
+                      console.error(
+                        "Variation second stream failed:",
+                        streamErr,
+                      );
+                      // VARIATION-маркер сохранён, не advance — следующий запрос ученика получит вариацию
+                    }
+                  } catch (err) {
+                    console.error("Variation generation failed:", err);
+                    stepResult = await advanceStep(
+                      supabase,
+                      sessionId,
+                      topicId,
+                      raven,
+                      sessionState as SessionState | null,
+                    );
+                  }
+                } else {
+                  // Нет данных задачи — fallback: advance
+                  stepResult = await advanceStep(
+                    supabase,
+                    sessionId,
+                    topicId,
+                    raven,
+                    sessionState as SessionState | null,
+                  );
+                }
+              } else {
+                // Хугин step_done или редкий cross-marker → advance напрямую
                 stepResult = await advanceStep(
                   supabase,
                   sessionId,

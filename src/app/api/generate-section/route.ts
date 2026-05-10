@@ -125,8 +125,28 @@ export async function POST(req: Request) {
       .map((b) => b.text)
       .join("\n\n");
 
-    // Ограничить общий текст 20000 символов для ЭТАПА 2
-    const compactFileText = allFileTexts.slice(0, 8000);
+    // Ограничить общий текст 8000 символов для ЭТАПА 2
+    let compactFileText = allFileTexts.slice(0, 8000);
+
+    // Fallback: при PDF-only загрузке parseFile возвращает пустой text для PDF,
+    // и compactFileText содержит только метки [Файл: name]. Дополняем именами
+    // файлов и контекстом раздела чтобы Haiku имел подсказки для генерации.
+    if (compactFileText.length < 200) {
+      const fileNames: string[] = [];
+      for (const block of fileBlocks) {
+        if (block.type === "text" && typeof block.text === "string") {
+          const match = block.text.match(/\[Файл:\s*([^\]\n]+?)\s*\]/);
+          if (match) fileNames.push(match[1]);
+        }
+      }
+      if (fileNames.length > 0) {
+        compactFileText = `Загруженные файлы:\n${fileNames
+          .map((n) => `- ${n}`)
+          .join(
+            "\n",
+          )}\n\nРаздел: ${sectionName}\nКласс: ${grade}\nПредмет: ${subject}\n\n(Полное содержимое файлов недоступно в этом этапе — опирайся на имена файлов, тему раздела и стандартную школьную программу.)`;
+      }
+    }
 
     // ========== ЭТАП 1: Определить темы ==========
     const step1Content: Anthropic.ContentBlockParam[] = [
@@ -159,7 +179,9 @@ export async function POST(req: Request) {
 - Каждая тема: 3-7 learning_goals
 - НЕ дублируй материал между темами
 - Если файлы содержат нумерацию уроков — используй её для разбиения
-- Язык: русский`,
+- Язык: русский
+
+Используй имена загруженных файлов как подсказку для разбиения на темы. Например, если файл называется 'Тригонометрия_синус_косинус.pdf' — это подсказка что есть тема про синус и косинус. Но не ограничивайся только именами — анализируй содержимое.`,
       },
     ];
 
