@@ -361,6 +361,7 @@ export async function POST(req: NextRequest) {
             const estimatedBefore =
               (sessionState?.step_index ?? 0) * 3;
             const msgsOnStep = userMsgCount - estimatedBefore;
+            const isFirstRequest = !history || history.length === 0;
             console.log(
               "[MARKER] msgsOnStep:",
               msgsOnStep,
@@ -370,17 +371,19 @@ export async function POST(req: NextRequest) {
               estimatedBefore,
               "step_index:",
               sessionState?.step_index,
+              "isFirstRequest:",
+              isFirstRequest,
             );
 
             const isTaskContext =
               sessionState?.current_step_type === "task" ||
               raven === "muninn";
-            if (
-              msgsOnStep >= 2 ||
-              (hasTaskDone && isTaskContext)
-            ) {
+            // Гейт: пропускаем маркер только на самом первом сообщении сессии
+            // (часто это приветствие — модель не должна сразу advance'иться).
+            // Дальше доверяем модели: маркер означает advance.
+            if (!isFirstRequest) {
               console.log(
-                "[GATE] passed msgsOnStep gate. hasTaskDone:",
+                "[GATE] passed first-message gate. hasTaskDone:",
                 hasTaskDone,
                 "hasStepDone:",
                 hasStepDone,
@@ -534,7 +537,7 @@ export async function POST(req: NextRequest) {
 
                       // task_done во втором стриме крайне маловероятен (модель сама не отвечает за ученика),
                       // но если случилось — удалить маркер вариации и advance
-                      if (parser2.hasTaskDone() && msgsOnStep >= 2) {
+                      if (parser2.hasTaskDone()) {
                         await supabase
                           .from("chat_messages")
                           .delete()
@@ -712,7 +715,7 @@ export async function POST(req: NextRequest) {
                 }
               }
             }
-            // Если msgsOnStep < 2 — игнорируем маркер: ученик не мог понять за 1 сообщение
+            // Первое сообщение сессии — игнорируем маркер (приветствие, не настоящий ответ)
           }
           } catch (markerErr) {
             console.error("[MARKER-ERROR] uncaught:", markerErr);

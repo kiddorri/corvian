@@ -21,7 +21,19 @@ type Raven = "huginn" | "muninn";
 type ChatPhase = "huginn" | "transition" | "muninn" | "result";
 type Message = { role: "user" | "assistant"; content: string };
 type TopicMeta = { name: string; section: string };
-type ResultData = { score: number; xpEarned: number; streak: number };
+type TaskResult = {
+  question: string;
+  status: string;
+  attempts: number;
+};
+type ResultData = {
+  score: number;
+  xpEarned: number;
+  streak: number;
+  tasks: TaskResult[];
+  totalTasks: number;
+  completedTasks: number;
+};
 type Skill = { id: string; text: string; level: string; sort_order: number };
 type Goal = { id: string; text: string; sort_order: number };
 
@@ -149,7 +161,46 @@ export default function ChatPage() {
       .update({ ended_at: new Date().toISOString() })
       .eq("id", sessionId);
 
-    const score = BASE_SCORE;
+    const { data: progressRows } = await supabase
+      .from("task_progress")
+      .select("status, attempts, task:tasks(id, question, sort_order)")
+      .eq("session_id", sessionId);
+
+    type ProgressRow = {
+      status: string;
+      attempts: number | null;
+      task:
+        | { id: string; question: string; sort_order: number | null }
+        | { id: string; question: string; sort_order: number | null }[]
+        | null;
+    };
+    const taskResults: TaskResult[] = (
+      (progressRows ?? []) as unknown as ProgressRow[]
+    )
+      .map((row) => {
+        const task = Array.isArray(row.task) ? row.task[0] : row.task;
+        return {
+          question: task?.question ?? "",
+          status: row.status,
+          attempts: row.attempts ?? 0,
+          sort_order: task?.sort_order ?? 0,
+        };
+      })
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map(({ question, status, attempts }) => ({
+        question,
+        status,
+        attempts,
+      }));
+
+    const totalTasks = taskResults.length;
+    const completedTasks = taskResults.filter(
+      (t) => t.status === "completed",
+    ).length;
+    const score =
+      totalTasks > 0
+        ? Math.round((completedTasks / totalTasks) * 100)
+        : BASE_SCORE;
 
     await supabase
       .from("student_progress")
@@ -183,7 +234,14 @@ export default function ChatPage() {
     }
 
     refreshStudent();
-    setResultData({ score, xpEarned, streak: newStreak });
+    setResultData({
+      score,
+      xpEarned,
+      streak: newStreak,
+      tasks: taskResults,
+      totalTasks,
+      completedTasks,
+    });
     setChatPhase("result");
   }, [sessionId, topicId, student, refreshStudent]);
 
@@ -748,10 +806,49 @@ export default function ChatPage() {
               <p className="mt-1 text-[10px] text-[#52525B]">дней</p>
             </div>
             <div className="rounded-lg border border-[rgba(139,92,246,0.08)] bg-[#0F0D17] p-3">
-              <p className="font-mono text-sm text-[#22C55E]">✓</p>
-              <p className="mt-1 text-[10px] text-[#52525B]">завершено</p>
+              <p className="font-mono text-sm text-[#22C55E]">
+                {resultData.completedTasks}/{resultData.totalTasks}
+              </p>
+              <p className="mt-1 text-[10px] text-[#52525B]">задач</p>
             </div>
           </div>
+
+          {resultData.tasks.length > 0 && (
+            <div className="mt-8 w-full text-left">
+              <p className="mb-3 text-[11px] uppercase tracking-wider text-[#52525B]">
+                Разбор задач
+              </p>
+              <ul className="flex flex-col gap-2">
+                {resultData.tasks.map((t, i) => {
+                  const isDone = t.status === "completed";
+                  return (
+                    <li
+                      key={i}
+                      className="flex items-start gap-3 rounded-lg border border-[rgba(139,92,246,0.08)] bg-[#0F0D17] p-3"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="mt-0.5 font-mono text-sm"
+                        style={{ color: isDone ? "#22C55E" : "#EF4444" }}
+                      >
+                        {isDone ? "✓" : "✗"}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs leading-snug text-[#F4F4F5] line-clamp-2">
+                          {t.question}
+                        </p>
+                        {t.attempts > 0 && (
+                          <p className="mt-1 text-[10px] text-[#52525B]">
+                            Попыток: {t.attempts}
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
 
           <div className="mt-10 flex w-full flex-col gap-3">
             <Link
