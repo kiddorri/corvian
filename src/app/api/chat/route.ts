@@ -509,7 +509,7 @@ export async function POST(req: NextRequest) {
                   );
                 }
               } else {
-                // Хугин step_done или редкий cross-marker → advance напрямую
+                // Хугин step_done → advance напрямую
                 stepResult = await advanceStep(
                   supabase,
                   sessionId,
@@ -517,6 +517,110 @@ export async function POST(req: NextRequest) {
                   raven,
                   sessionState as SessionState | null,
                 );
+
+                // Следующая цель — Хугин начинает её вторым стримом автоматически
+                if (
+                  raven === "huginn" &&
+                  stepResult.advanced &&
+                  !stepResult.finished &&
+                  stepResult.nextStepId
+                ) {
+                  try {
+                    const { data: nextGoalData } = await supabase
+                      .from("learning_goals")
+                      .select("id, text")
+                      .eq("id", stepResult.nextStepId)
+                      .single();
+
+                    if (nextGoalData) {
+                      controller.enqueue(
+                        encoder.encode(
+                          `data: ${JSON.stringify({ newBubble: true })}\n\n`,
+                        ),
+                      );
+
+                      const nextGoalPrompt = buildSystemPrompt({
+                        raven: "huginn",
+                        topic: topic as Topic | null,
+                        calibration: calibration as Calibration | null,
+                        goals: (goals ?? []) as Goal[],
+                        currentGoal: nextGoalData as {
+                          id: string;
+                          text: string;
+                        },
+                        currentTask: null,
+                        stepProgress: {
+                          total: stepProgress.total,
+                          completed: stepProgress.completed + 1,
+                        },
+                        huginnSummary: undefined,
+                        isVariation: false,
+                      });
+
+                      const nextGoalMessages = [
+                        ...messages,
+                        {
+                          role: "assistant" as const,
+                          content: cleanedResponse,
+                        },
+                        { role: "user" as const, content: "продолжай" },
+                      ];
+
+                      const nextGoalStream = anthropic.messages.stream(
+                        {
+                          model: "claude-haiku-4-5-20251001",
+                          max_tokens: 1024,
+                          system: nextGoalPrompt,
+                          messages: nextGoalMessages,
+                        },
+                        { timeout: 20000 },
+                      );
+
+                      const parser3 = new StreamParser();
+
+                      for await (const event of nextGoalStream) {
+                        if (
+                          event.type === "content_block_delta" &&
+                          event.delta.type === "text_delta"
+                        ) {
+                          const chunkText = parser3.processChunk(
+                            event.delta.text,
+                          );
+                          if (chunkText) {
+                            controller.enqueue(
+                              encoder.encode(
+                                `data: ${JSON.stringify({ text: chunkText })}\n\n`,
+                              ),
+                            );
+                          }
+                        }
+                      }
+
+                      const remaining3 = parser3.flush();
+                      if (remaining3) {
+                        controller.enqueue(
+                          encoder.encode(
+                            `data: ${JSON.stringify({ text: remaining3 })}\n\n`,
+                          ),
+                        );
+                      }
+
+                      const nextGoalText = parser3.getCleanedResponse();
+                      if (nextGoalText) {
+                        await supabase.from("chat_messages").insert({
+                          session_id: sessionId,
+                          role: "assistant",
+                          content: nextGoalText,
+                        });
+                      }
+                    }
+                  } catch (streamErr) {
+                    console.error(
+                      "Huginn next goal stream failed:",
+                      streamErr,
+                    );
+                  }
+                }
               }
             }
             // Если msgsOnStep < 2 — игнорируем маркер: ученик не мог понять за 1 сообщение
