@@ -100,6 +100,9 @@ export default function ChatPage() {
   const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTextRef = useRef<string>("");
   const sentInitialRef = useRef(false);
+  const userAtBottomRef = useRef(true);
+  const prevMessageCountRef = useRef(0);
+  const scrollRafRef = useRef<number | null>(null);
   // latest messages snapshot for closure-free reads
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
@@ -670,12 +673,43 @@ export default function ChatPage() {
     sendMessage,
   ]);
 
-  // Auto-scroll on new messages
+  // Track whether the user has scrolled away from the bottom (>100px gap)
   useEffect(() => {
-    bottomAnchorRef.current?.scrollIntoView({ block: "end" });
     const el = scrollRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const onScroll = () => {
+      userAtBottomRef.current =
+        el.scrollTop + el.clientHeight >= el.scrollHeight - 100;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [bootstrapped]);
+
+  // Auto-scroll: smooth on new bubbles, instant (rAF-batched) on streaming
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const prevCount = prevMessageCountRef.current;
+    const messageCountChanged = messages.length !== prevCount;
+    prevMessageCountRef.current = messages.length;
+
+    // Respect manual scroll-up — don't yank the view
+    if (!userAtBottomRef.current) return;
+
+    if (messageCountChanged) {
+      // New bubble — smooth scroll to bottom
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      // Streaming chunk — instant, batched via rAF so frames don't pile up
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+      scrollRafRef.current = requestAnimationFrame(() => {
+        const e = scrollRef.current;
+        if (e) e.scrollTop = e.scrollHeight;
+        scrollRafRef.current = null;
+      });
     }
   }, [messages, isLoading]);
 
