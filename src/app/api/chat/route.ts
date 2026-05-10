@@ -331,6 +331,16 @@ export async function POST(req: NextRequest) {
           // Обработка маркеров state machine
           const hasStepDone = parser.hasStepDone();
           const hasTaskDone = parser.hasTaskDone();
+          console.log(
+            "[MARKER] hasStepDone:",
+            hasStepDone,
+            "hasTaskDone:",
+            hasTaskDone,
+            "step_type:",
+            sessionState?.current_step_type,
+            "step_id:",
+            sessionState?.current_step_id,
+          );
 
           let stepResult: {
             advanced: boolean;
@@ -346,12 +356,33 @@ export async function POST(req: NextRequest) {
             const estimatedBefore =
               (sessionState?.step_index ?? 0) * 3;
             const msgsOnStep = userMsgCount - estimatedBefore;
+            console.log(
+              "[MARKER] msgsOnStep:",
+              msgsOnStep,
+              "userMsgCount:",
+              userMsgCount,
+              "estimatedBefore:",
+              estimatedBefore,
+              "step_index:",
+              sessionState?.step_index,
+            );
 
-            if (msgsOnStep >= 2) {
+            if (
+              msgsOnStep >= 2 ||
+              (hasTaskDone && sessionState?.current_step_type === "task")
+            ) {
               if (
                 hasTaskDone &&
                 sessionState?.current_step_type === "task"
               ) {
+                console.log(
+                  "[MARKER] activeVariation:",
+                  !!activeVariation,
+                  "currentTaskData:",
+                  !!currentTaskData,
+                  "topic:",
+                  !!topic,
+                );
                 if (activeVariation) {
                   // Вариация решена — удалить маркер и advance
                   await supabase

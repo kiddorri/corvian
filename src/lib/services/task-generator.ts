@@ -14,7 +14,7 @@ export async function generateTaskVariation(
 
   const response = await anthropic.messages.create(
     {
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 300,
       system:
         'Ты генерируешь вариации учебных задач. Отвечай ТОЛЬКО в формате JSON без markdown: {"question": "...", "answer": "..."}',
