@@ -383,7 +383,14 @@ export async function POST(req: NextRequest) {
                   "topic:",
                   !!topic,
                 );
+                console.log(
+                  "[VARIATION] checking activeVariation:",
+                  !!activeVariation,
+                );
                 if (activeVariation) {
+                  console.log(
+                    "[VARIATION] deleting variation marker and advancing",
+                  );
                   // Вариация решена — удалить маркер и advance
                   await supabase
                     .from("chat_messages")
@@ -399,19 +406,34 @@ export async function POST(req: NextRequest) {
                     raven,
                     sessionState as SessionState | null,
                   );
+                  console.log(
+                    "[ADVANCE] result:",
+                    JSON.stringify(stepResult),
+                  );
                 } else if (currentTaskData && topic) {
                   // Оригинальная задача решена — генерируем вариацию через Sonnet
                   try {
+                    console.log(
+                      "[VARIATION] generating new variation for task:",
+                      currentTaskData?.question,
+                    );
                     const variation = await generateTaskVariation(
                       currentTaskData.question,
                       currentTaskData.answer,
                       (topic as Topic).name,
+                    );
+                    console.log(
+                      "[VARIATION] generated:",
+                      JSON.stringify(variation),
                     );
                     await supabase.from("chat_messages").insert({
                       session_id: sessionId,
                       role: "system",
                       content: "VARIATION:" + JSON.stringify(variation),
                     });
+                    console.log(
+                      "[VARIATION] saved, starting second stream",
+                    );
 
                     // --- Второй стрим: Мунин выдаёт вариацию ---
                     try {
@@ -511,8 +533,16 @@ export async function POST(req: NextRequest) {
                           raven,
                           sessionState as SessionState | null,
                         );
+                        console.log(
+                          "[ADVANCE] result:",
+                          JSON.stringify(stepResult),
+                        );
                       }
                     } catch (streamErr) {
+                      console.log(
+                        "[VARIATION] second stream FAILED:",
+                        streamErr,
+                      );
                       console.error(
                         "Variation second stream failed:",
                         streamErr,
@@ -520,6 +550,7 @@ export async function POST(req: NextRequest) {
                       // VARIATION-маркер сохранён, не advance — следующий запрос ученика получит вариацию
                     }
                   } catch (err) {
+                    console.log("[VARIATION] generation FAILED:", err);
                     console.error("Variation generation failed:", err);
                     stepResult = await advanceStep(
                       supabase,
@@ -527,6 +558,10 @@ export async function POST(req: NextRequest) {
                       topicId,
                       raven,
                       sessionState as SessionState | null,
+                    );
+                    console.log(
+                      "[ADVANCE] result:",
+                      JSON.stringify(stepResult),
                     );
                   }
                 } else {
@@ -538,6 +573,10 @@ export async function POST(req: NextRequest) {
                     raven,
                     sessionState as SessionState | null,
                   );
+                  console.log(
+                    "[ADVANCE] result:",
+                    JSON.stringify(stepResult),
+                  );
                 }
               } else {
                 // Хугин step_done → advance напрямую
@@ -548,6 +587,7 @@ export async function POST(req: NextRequest) {
                   raven,
                   sessionState as SessionState | null,
                 );
+                console.log("[ADVANCE] result:", JSON.stringify(stepResult));
 
                 // Следующая цель — Хугин начинает её вторым стримом автоматически
                 if (
@@ -681,6 +721,7 @@ export async function POST(req: NextRequest) {
                 raven,
                 sessionState as SessionState | null,
               );
+              console.log("[ADVANCE] result:", JSON.stringify(stepResult));
             }
           }
 
