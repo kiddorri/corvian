@@ -380,6 +380,43 @@ export async function POST(req: NextRequest) {
               isFirstRequest,
             );
 
+            // Защита от ложного task_done на сообщении, где Мунин ВЫДАЁТ задачу:
+            // считаем сколько user-сообщений было после последнего advance этого raven.
+            // Если ученик ещё не отвечал (или только написал «дальше») — task_done должен
+            // быть проигнорирован, иначе сгенерируется вариация и второй стрим дублирует
+            // только что выданный вопрос.
+            const advanceTable =
+              raven === "muninn" ? "task_progress" : "goal_step_progress";
+            const { data: lastCompletedRow } = await supabase
+              .from(advanceTable)
+              .select("completed_at")
+              .eq("session_id", sessionId)
+              .not("completed_at", "is", null)
+              .order("completed_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            const sinceAt =
+              (lastCompletedRow as { completed_at: string } | null)
+                ?.completed_at ?? null;
+            let userMsgsSinceAdvance = 0;
+            {
+              const q = supabase
+                .from("chat_messages")
+                .select("id", { count: "exact", head: true })
+                .eq("session_id", sessionId)
+                .eq("role", "user");
+              const { count } = await (sinceAt
+                ? q.gt("created_at", sinceAt)
+                : q);
+              userMsgsSinceAdvance = count ?? 0;
+            }
+            console.log(
+              "[GATE] userMsgsSinceAdvance:",
+              userMsgsSinceAdvance,
+              "sinceAt:",
+              sinceAt,
+            );
+
             const isTaskContext =
               sessionState?.current_step_type === "task" ||
               raven === "muninn";
@@ -397,7 +434,17 @@ export async function POST(req: NextRequest) {
                 "isTaskContext:",
                 isTaskContext,
               );
-              if (hasTaskDone && isTaskContext) {
+              if (hasTaskDone && isTaskContext && userMsgsSinceAdvance < 2) {
+                // Мунин поставил <task_done/>, но ученик ещё не отвечал на текущую
+                // задачу (после последнего advance). Скорее всего модель ошиблась и
+                // прилепила маркер к сообщению где сама же выдала задачу. Игнорируем
+                // — иначе сгенерируется вариация и второй стрим продублирует вопрос.
+                console.log(
+                  "[GATE] task_done suppressed — only",
+                  userMsgsSinceAdvance,
+                  "user msg(s) since last advance (need ≥ 2)",
+                );
+              } else if (hasTaskDone && isTaskContext) {
                 console.log(
                   "[MARKER] activeVariation:",
                   !!activeVariation,
@@ -458,7 +505,12 @@ export async function POST(req: NextRequest) {
                       "[VARIATION] saved, starting second stream",
                     );
 
-                    // --- Второй стрим: Мунин выдаёт вариацию ---
+                    // --- Второй стрим CASE 1: Мунин выдаёт сгенерированную вариацию ---
+                    // Запускается ТОЛЬКО здесь — после успешной генерации вариации
+                    // через Sonnet, до advance (ученик решает вариацию следующим
+                    // сообщением). После activeVariation-блока (delete + advance)
+                    // никакого второго стрима для Мунина не запускается — следующая
+                    // задача выдаётся обычным main-стримом на следующем сообщении.
                     try {
                       controller.enqueue(
                         encoder.encode(
@@ -615,7 +667,10 @@ export async function POST(req: NextRequest) {
                 );
                 console.log("[ADVANCE] result:", JSON.stringify(stepResult));
 
-                // Следующая цель — Хугин начинает её вторым стримом автоматически
+                // --- Второй стрим CASE 2: Хугин авто-переход к следующей цели ---
+                // Запускается ТОЛЬКО для raven === "huginn" после step_done +
+                // advance. Гард raven === "huginn" критичен — для Мунина этот
+                // блок не должен срабатывать никогда.
                 if (
                   raven === "huginn" &&
                   stepResult.advanced &&
