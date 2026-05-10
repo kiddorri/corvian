@@ -8,6 +8,7 @@ import {
   advanceStep,
   type SessionState,
 } from "@/lib/services/lesson-engine";
+import { generateTaskVariation } from "@/lib/services/task-generator";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -197,26 +198,74 @@ export async function POST(req: NextRequest) {
       huginnSummary = huginnSession?.summary || "";
     }
 
+    // Активная вариация задачи (хранится как system-сообщение в chat_messages)
+    let activeVariation: { question: string; answer: string } | null = null;
+    if (sessionState?.current_step_type === "task") {
+      const { data: variationMsg } = await supabase
+        .from("chat_messages")
+        .select("content")
+        .eq("session_id", sessionId)
+        .eq("role", "system")
+        .ilike("content", "VARIATION:%")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (variationMsg) {
+        try {
+          const raw = (variationMsg as { content: string }).content;
+          const parsed = JSON.parse(raw.replace(/^VARIATION:/, ""));
+          if (
+            parsed &&
+            typeof parsed.question === "string" &&
+            typeof parsed.answer === "string"
+          ) {
+            activeVariation = {
+              question: parsed.question,
+              answer: parsed.answer,
+            };
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+    }
+
+    // Если есть активная вариация — подменяем данные задачи в промпте
+    const promptCurrentTask =
+      activeVariation && currentTaskData
+        ? {
+            id: currentTaskData.id,
+            question: activeVariation.question,
+            answer: activeVariation.answer,
+            steps: null,
+          }
+        : currentTaskData;
+
     const systemPrompt = buildSystemPrompt({
       raven,
       topic: topic as Topic | null,
       calibration: calibration as Calibration | null,
       goals: (goals ?? []) as Goal[],
       currentGoal: currentStepData,
-      currentTask: currentTaskData,
+      currentTask: promptCurrentTask,
       stepProgress,
       huginnSummary: huginnSummary || undefined,
+      isVariation: !!activeVariation,
     });
 
     await supabase
       .from("chat_messages")
       .insert({ session_id: sessionId, role: "user", content: message });
 
+    // В messages для Anthropic API передаём только user/assistant (system-маркеры вариаций не нужны модели)
     const messages = [
-      ...((history ?? []) as { role: string; content: string }[]).map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })),
+      ...((history ?? []) as { role: string; content: string }[])
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        })),
       { role: "user" as const, content: message },
     ];
 
@@ -286,6 +335,7 @@ export async function POST(req: NextRequest) {
             finished: boolean;
             nextStepId: string | null;
           } = { advanced: false, finished: false, nextStepId: null };
+          let variationReady = false;
 
           if (hasStepDone || hasTaskDone) {
             const userMsgCount =
@@ -297,19 +347,63 @@ export async function POST(req: NextRequest) {
             const msgsOnStep = userMsgCount - estimatedBefore;
 
             if (msgsOnStep >= 2) {
-              let shouldAdvance = true;
-
-              // Мунин: первый <task_done/> → модель даёт вариацию в том же сообщении.
-              // Не advance, пока ученик не решит вариацию (второй <task_done/> уже без "Для закрепления").
               if (
                 hasTaskDone &&
-                sessionState?.current_step_type === "task" &&
-                cleanedResponse.includes("Для закрепления")
+                sessionState?.current_step_type === "task"
               ) {
-                shouldAdvance = false;
-              }
+                if (activeVariation) {
+                  // Вариация решена — удалить маркер и advance
+                  await supabase
+                    .from("chat_messages")
+                    .delete()
+                    .eq("session_id", sessionId)
+                    .eq("role", "system")
+                    .ilike("content", "VARIATION:%");
 
-              if (shouldAdvance) {
+                  stepResult = await advanceStep(
+                    supabase,
+                    sessionId,
+                    topicId,
+                    raven,
+                    sessionState as SessionState | null,
+                  );
+                } else if (currentTaskData && topic) {
+                  // Оригинальная задача решена — генерируем вариацию через Sonnet
+                  try {
+                    const variation = await generateTaskVariation(
+                      currentTaskData.question,
+                      currentTaskData.answer,
+                      (topic as Topic).name,
+                    );
+                    await supabase.from("chat_messages").insert({
+                      session_id: sessionId,
+                      role: "system",
+                      content: "VARIATION:" + JSON.stringify(variation),
+                    });
+                    variationReady = true;
+                    // НЕ advance — следующее сообщение Мунин даст вариацию
+                  } catch (err) {
+                    console.error("Variation generation failed:", err);
+                    stepResult = await advanceStep(
+                      supabase,
+                      sessionId,
+                      topicId,
+                      raven,
+                      sessionState as SessionState | null,
+                    );
+                  }
+                } else {
+                  // Нет данных задачи — fallback: advance
+                  stepResult = await advanceStep(
+                    supabase,
+                    sessionId,
+                    topicId,
+                    raven,
+                    sessionState as SessionState | null,
+                  );
+                }
+              } else {
+                // Хугин step_done или редкий cross-marker → advance напрямую
                 stepResult = await advanceStep(
                   supabase,
                   sessionId,
@@ -355,6 +449,7 @@ export async function POST(req: NextRequest) {
                 done: true,
                 stepAdvanced: stepResult.advanced,
                 stepFinished: stepResult.finished,
+                variationReady,
               })}\n\n`,
             ),
           );
