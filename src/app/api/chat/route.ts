@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest } from "next/server";
+import { buildSystemPrompt } from "@/lib/services/prompt-builder";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -29,14 +30,7 @@ type Calibration = {
   allow_analogies: boolean;
 };
 
-type Skill = { text: string; level: string };
 type Goal = { id: string; text: string };
-type Task = {
-  question: string;
-  answer: string;
-  steps: string | null;
-  difficulty: number;
-};
 type SessionState = {
   current_step_type: string | null;
   current_step_id: string | null;
@@ -293,20 +287,9 @@ export async function POST(req: NextRequest) {
       .eq("id", topicId)
       .single();
 
-    const { data: skills } = await supabase
-      .from("skills")
-      .select("text, level")
-      .eq("topic_id", topicId);
-
     const { data: goals } = await supabase
       .from("learning_goals")
       .select("id, text, sort_order")
-      .eq("topic_id", topicId)
-      .order("sort_order", { ascending: true });
-
-    const { data: tasks } = await supabase
-      .from("tasks")
-      .select("question, answer, steps, difficulty")
       .eq("topic_id", topicId)
       .order("sort_order", { ascending: true });
 
@@ -445,19 +428,16 @@ export async function POST(req: NextRequest) {
       huginnSummary = huginnSession?.summary || "";
     }
 
-    const systemPrompt = buildSystemPrompt(
+    const systemPrompt = buildSystemPrompt({
       raven,
-      topic as Topic | null,
-      calibration as Calibration | null,
-      (skills ?? []) as Skill[],
-      (goals ?? []) as Goal[],
-      (tasks ?? []) as Task[],
-      huginnSummary,
-      currentStepData,
-      currentTaskData,
+      topic: topic as Topic | null,
+      calibration: calibration as Calibration | null,
+      goals: (goals ?? []) as Goal[],
+      currentGoal: currentStepData,
+      currentTask: currentTaskData,
       stepProgress,
-      sessionState as SessionState | null,
-    );
+      huginnSummary: huginnSummary || undefined,
+    });
 
     await supabase
       .from("chat_messages")
@@ -645,107 +625,4 @@ export async function POST(req: NextRequest) {
   }
 }
 
-function buildSystemPrompt(
-  raven: string,
-  topic: Topic | null,
-  calibration: Calibration | null,
-  skills: Skill[],
-  goals: Goal[],
-  tasks: Task[],
-  huginnSummary: string | null,
-  currentStepData: { text: string; id: string } | null,
-  currentTaskData: {
-    question: string;
-    answer: string;
-    steps: string | null;
-    id: string;
-  } | null,
-  stepProgress: { total: number; completed: number },
-  sessionState: SessionState | null,
-): string {
-  void skills;
-  void tasks;
-  void sessionState;
-
-  if (raven === "huginn") {
-    const grade = topic?.classes?.grade ?? "";
-    const subject = topic?.classes?.subject ?? "";
-    const socraticLevel = calibration?.socratic_level ?? 50;
-
-    const currentGoalBlock = currentStepData
-      ? `\nТЕКУЩАЯ ЦЕЛЬ (объясни именно это):\n${currentStepData.text}\n\nПРОГРЕСС: ${stepProgress.completed} из ${stepProgress.total} целей пройдено.`
-      : "";
-
-    const goalsOverview =
-      goals.length > 0
-        ? `\nВСЕ ЦЕЛИ УРОКА (для контекста, НЕ перескакивай):\n${goals
-            .map((g, i) => `${i + 1}. ${g.text}`)
-            .join("\n")}`
-        : "";
-
-    return `Ты — Хугин, ворон мысли. AI-тьютор на платформе Corvian.
-
-УЧЕНИК: ${grade} класс, предмет ${subject}.
-ТЕМА: ${topic?.name ?? ""}
-РАЗДЕЛ: ${topic?.section ?? ""}
-${calibration?.theory_text ? `ТЕОРИЯ:\n${calibration.theory_text}` : ""}
-${calibration?.huginn_instructions ? `ИНСТРУКЦИИ УЧИТЕЛЯ:\n${calibration.huginn_instructions}` : ""}
-${currentGoalBlock}
-${goalsOverview}
-
-ПРАВИЛА:
-1. Объясняй ТОЛЬКО текущую цель. Не перескакивай к следующим
-2. Задавай ОДИН вопрос за раз. Жди ответа
-3. Говори как живой учитель — короткие предложения, без канцелярита
-4. Правильный ответ → похвали коротко и продолжи объяснение текущей цели
-5. Неправильный ответ → НЕ говори "неправильно". Скажи "Давай подумаем" и задай вопрос попроще
-6. НИКОГДА не говори "очевидно", "просто", "легко"
-${calibration?.allow_analogies !== false ? "7. Используй примеры из жизни школьника" : "7. Аналогии ОТКЛЮЧЕНЫ — объясняй строго по теории"}
-${calibration?.allow_humor === false ? "8. Юмор ОТКЛЮЧЁН учителем" : "8. Можешь пошутить, но НИКОГДА над учеником"}
-9. Отвечай на русском. Формулы: $формула$
-10. Отвечай кратко — 2-3 предложения максимум
-11. НЕ задавай открытые философские вопросы — только конкретные с конкретным ответом
-12. Строгость: ${socraticLevel}/100
-
-КОГДА УЧЕНИК ПОНЯЛ ТЕКУЩУЮ ЦЕЛЬ:
-Добавь в КОНЕЦ своего ответа на отдельной строке маркер:
-<step_done/>
-
-НЕ ставь маркер если ученик ещё не показал понимание. Лучше задай ещё один вопрос.`;
-  }
-
-  // Мунин
-  const grade = topic?.classes?.grade ?? "";
-  const maxHints = calibration?.max_hints_before_answer ?? 3;
-
-  const currentTaskBlock = currentTaskData
-    ? `\nТЕКУЩАЯ ЗАДАЧА:\nВопрос: ${currentTaskData.question}\nПравильный ответ (НИКОГДА не показывай ученику): ${currentTaskData.answer}${currentTaskData.steps ? `\nШаги решения (для подсказок): ${currentTaskData.steps}` : ""}\n\nПРОГРЕСС: ${stepProgress.completed} из ${stepProgress.total} задач решено.`
-    : "";
-
-  return `Ты — Мунин, ворон памяти. AI-тьютор на платформе Corvian.
-
-УЧЕНИК: ${grade} класс.
-ТЕМА: ${topic?.name ?? ""}
-${huginnSummary ? `ЧТО УЧЕНИК ПОНЯЛ С ХУГИНОМ:\n${huginnSummary}` : ""}
-${calibration?.muninn_instructions ? `ИНСТРУКЦИИ УЧИТЕЛЯ:\n${calibration.muninn_instructions}` : ""}
-${currentTaskBlock}
-
-ПРАВИЛА:
-1. Работай ТОЛЬКО с текущей задачей. НЕ переходи к следующей сам
-2. Сформулируй задачу своими словами — не копируй JSON
-3. ПРОВЕРКА ОТВЕТА: сравнивай по значению, НЕ по форме (√3/2 = 0.866 = одно и то же)
-4. Правильный ответ → похвали коротко
-5. Неправильный ответ → спроси "Какой первый шаг?" или дай подсказку
-6. После ${maxHints} подсказок — покажи первый шаг решения, но НЕ финальный ответ
-7. Если ученик пишет "не понимаю" — объясни шаг подробнее
-8. Отвечай на русском. Формулы: $формула$
-9. Отвечай кратко — 2-3 предложения
-10. Если НЕ уверен правильный ли ответ — считай правильным
-
-КОГДА УЧЕНИК РЕШИЛ ЗАДАЧУ ПРАВИЛЬНО:
-Добавь в КОНЕЦ ответа на отдельной строке маркер:
-<task_done/>
-
-НЕ ставь маркер если ответ неправильный или ученик ещё не ответил.`;
-}
 
