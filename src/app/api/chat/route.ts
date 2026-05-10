@@ -297,13 +297,27 @@ export async function POST(req: NextRequest) {
             const msgsOnStep = userMsgCount - estimatedBefore;
 
             if (msgsOnStep >= 2) {
-              stepResult = await advanceStep(
-                supabase,
-                sessionId,
-                topicId,
-                raven,
-                sessionState as SessionState | null,
-              );
+              let shouldAdvance = true;
+
+              // Мунин: первый <task_done/> → модель даёт вариацию в том же сообщении.
+              // Не advance, пока ученик не решит вариацию (второй <task_done/> уже без "Для закрепления").
+              if (
+                hasTaskDone &&
+                sessionState?.current_step_type === "task" &&
+                cleanedResponse.includes("Для закрепления")
+              ) {
+                shouldAdvance = false;
+              }
+
+              if (shouldAdvance) {
+                stepResult = await advanceStep(
+                  supabase,
+                  sessionId,
+                  topicId,
+                  raven,
+                  sessionState as SessionState | null,
+                );
+              }
             }
             // Если msgsOnStep < 2 — игнорируем маркер: ученик не мог понять за 1 сообщение
           }
