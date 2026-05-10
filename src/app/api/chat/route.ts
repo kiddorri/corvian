@@ -331,20 +331,11 @@ export async function POST(req: NextRequest) {
               content: cleanedResponse,
             });
 
-          // Обработка маркеров state machine
-          const hasStepDone = parser.hasStepDone();
-          const hasTaskDone = parser.hasTaskDone();
-          console.log(
-            "[MARKER] hasStepDone:",
-            hasStepDone,
-            "hasTaskDone:",
-            hasTaskDone,
-            "step_type:",
-            sessionState?.current_step_type,
-            "step_id:",
-            sessionState?.current_step_id,
-          );
+          console.log("[DEBUG] message saved, checking markers");
 
+          // Обработка маркеров state machine
+          let hasStepDone = false;
+          let hasTaskDone = false;
           let stepResult: {
             advanced: boolean;
             finished: boolean;
@@ -352,7 +343,21 @@ export async function POST(req: NextRequest) {
           } = { advanced: false, finished: false, nextStepId: null };
 
           try {
+            hasStepDone = parser.hasStepDone();
+            hasTaskDone = parser.hasTaskDone();
+            console.log(
+              "[MARKER] hasStepDone:",
+              hasStepDone,
+              "hasTaskDone:",
+              hasTaskDone,
+              "step_type:",
+              sessionState?.current_step_type,
+              "step_id:",
+              sessionState?.current_step_id,
+            );
+
           if (hasStepDone || hasTaskDone) {
+            console.log("[DEBUG] entering marker block");
             console.log("[GATE] marker detected, computing msgsOnStep");
             const userMsgCount =
               (history ?? []).filter(
@@ -717,8 +722,8 @@ export async function POST(req: NextRequest) {
             }
             // Первое сообщение сессии — игнорируем маркер (приветствие, не настоящий ответ)
           }
-          } catch (markerErr) {
-            console.error("[MARKER-ERROR] uncaught:", markerErr);
+          } catch (err) {
+            console.error("[CRITICAL] marker processing crashed:", err);
           }
 
           // Fallback: если модель не поставила маркер за 8+ user-сообщений по одному шагу — форсировать продвижение
