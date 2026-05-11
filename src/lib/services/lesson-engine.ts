@@ -84,6 +84,14 @@ export async function initSessionSteps(
   }
 }
 
+// advanceStep: помечает текущий шаг как completed и переходит к следующему
+// pending шагу. Используется COUNT-based detection вместо
+// step_index+1 boundary check — устраняет class бага "finished:false на
+// последней задаче" из-за рассинхрона step_index и реального прогресса.
+//
+// Идемпотентен: повторный вызов с уже-completed шагом ничего не сломает.
+// Нет CAS-гейтов: финиш — это терминальное состояние, повторный апдейт
+// step_status="completed" безопасен.
 export async function advanceStep(
   supabase: SupabaseLike,
   sessionId: string,
@@ -99,9 +107,8 @@ export async function advanceStep(
     return { advanced: false, finished: false, nextStepId: null };
   }
 
-  const currentIndex = sessionState.step_index ?? 0;
-
   if (raven === "huginn") {
+    // 1. Помечаем текущую цель completed (идемпотентно).
     await supabase
       .from("goal_step_progress")
       .update({
@@ -111,55 +118,83 @@ export async function advanceStep(
       .eq("session_id", sessionId)
       .eq("goal_id", sessionState.current_step_id);
 
-    const { data: allGoals } = await supabase
-      .from("learning_goals")
-      .select("id")
-      .eq("topic_id", topicId)
-      .order("sort_order", { ascending: true });
+    // 2. Загружаем прогресс + полный список целей по порядку.
+    const [progressRes, goalsRes] = await Promise.all([
+      supabase
+        .from("goal_step_progress")
+        .select("goal_id, status")
+        .eq("session_id", sessionId),
+      supabase
+        .from("learning_goals")
+        .select("id")
+        .eq("topic_id", topicId)
+        .order("sort_order", { ascending: true }),
+    ]);
 
-    const nextIndex = currentIndex + 1;
+    const progress = (progressRes.data ?? []) as Array<{
+      goal_id: string;
+      status: string;
+    }>;
+    const allGoals = (goalsRes.data ?? []) as Array<{ id: string }>;
+
+    const completedSet = new Set(
+      progress.filter((p) => p.status === "completed").map((p) => p.goal_id),
+    );
+    const total = allGoals.length;
+    const completedCount = completedSet.size;
+
     console.log(
-      "[ADVANCE-DEBUG] raven:huginn step_index:",
-      currentIndex,
-      "totalSteps:",
-      allGoals?.length ?? 0,
-      "nextIndex:",
-      nextIndex,
+      "[ADVANCE-INTERNAL] raven:huginn currentStepId:",
+      sessionState.current_step_id,
+      "total:",
+      total,
+      "completed:",
+      completedCount,
       "willFinish:",
-      !allGoals || nextIndex >= allGoals.length,
+      total === 0 || completedCount >= total,
     );
 
-    if (!allGoals || nextIndex >= allGoals.length) {
-      const { data: finished } = await supabase
+    if (total === 0 || completedCount >= total) {
+      await supabase
         .from("chat_sessions")
         .update({ step_status: "completed" })
-        .eq("id", sessionId)
-        .eq("step_index", currentIndex)
-        .select("id");
-      if (!finished || finished.length === 0) {
-        return { advanced: false, finished: false, nextStepId: null };
-      }
+        .eq("id", sessionId);
       return { advanced: true, finished: true, nextStepId: null };
     }
 
-    const nextGoal = allGoals[nextIndex] as { id: string };
-    const { data: updated } = await supabase
+    // Найти первую цель в sort-order которая ещё НЕ completed.
+    let nextGoalId: string | null = null;
+    let nextIndex = -1;
+    for (let i = 0; i < allGoals.length; i++) {
+      if (!completedSet.has(allGoals[i].id)) {
+        nextGoalId = allGoals[i].id;
+        nextIndex = i;
+        break;
+      }
+    }
+
+    if (nextGoalId === null) {
+      // Защитный fallback: количество completed < total, но pending не нашли.
+      // Считаем сессию завершённой.
+      await supabase
+        .from("chat_sessions")
+        .update({ step_status: "completed" })
+        .eq("id", sessionId);
+      return { advanced: true, finished: true, nextStepId: null };
+    }
+
+    await supabase
       .from("chat_sessions")
       .update({
-        current_step_id: nextGoal.id,
+        current_step_id: nextGoalId,
         step_index: nextIndex,
         step_status: "teaching",
       })
-      .eq("id", sessionId)
-      .eq("step_index", currentIndex)
-      .select("id");
+      .eq("id", sessionId);
 
-    if (!updated || updated.length === 0) {
-      return { advanced: false, finished: false, nextStepId: null };
-    }
-
-    return { advanced: true, finished: false, nextStepId: nextGoal.id };
+    return { advanced: true, finished: false, nextStepId: nextGoalId };
   } else if (raven === "muninn") {
+    // 1. Помечаем текущую задачу completed (идемпотентно).
     await supabase
       .from("task_progress")
       .update({
@@ -169,54 +204,78 @@ export async function advanceStep(
       .eq("session_id", sessionId)
       .eq("task_id", sessionState.current_step_id);
 
-    const { data: allTasks } = await supabase
-      .from("tasks")
-      .select("id")
-      .eq("topic_id", topicId)
-      .order("sort_order", { ascending: true });
+    // 2. Загружаем прогресс + полный список задач по порядку.
+    const [progressRes, tasksRes] = await Promise.all([
+      supabase
+        .from("task_progress")
+        .select("task_id, status")
+        .eq("session_id", sessionId),
+      supabase
+        .from("tasks")
+        .select("id")
+        .eq("topic_id", topicId)
+        .order("sort_order", { ascending: true }),
+    ]);
 
-    const nextIndex = currentIndex + 1;
+    const progress = (progressRes.data ?? []) as Array<{
+      task_id: string;
+      status: string;
+    }>;
+    const allTasks = (tasksRes.data ?? []) as Array<{ id: string }>;
+
+    const completedSet = new Set(
+      progress.filter((p) => p.status === "completed").map((p) => p.task_id),
+    );
+    const total = allTasks.length;
+    const completedCount = completedSet.size;
+
     console.log(
-      "[ADVANCE-DEBUG] raven:muninn step_index:",
-      currentIndex,
-      "totalSteps:",
-      allTasks?.length ?? 0,
-      "nextIndex:",
-      nextIndex,
+      "[ADVANCE-INTERNAL] raven:muninn currentStepId:",
+      sessionState.current_step_id,
+      "total:",
+      total,
+      "completed:",
+      completedCount,
       "willFinish:",
-      !allTasks || nextIndex >= allTasks.length,
+      total === 0 || completedCount >= total,
     );
 
-    if (!allTasks || nextIndex >= allTasks.length) {
-      const { data: finished } = await supabase
+    if (total === 0 || completedCount >= total) {
+      await supabase
         .from("chat_sessions")
         .update({ step_status: "completed" })
-        .eq("id", sessionId)
-        .eq("step_index", currentIndex)
-        .select("id");
-      if (!finished || finished.length === 0) {
-        return { advanced: false, finished: false, nextStepId: null };
-      }
+        .eq("id", sessionId);
       return { advanced: true, finished: true, nextStepId: null };
     }
 
-    const nextTask = allTasks[nextIndex] as { id: string };
-    const { data: updated } = await supabase
+    let nextTaskId: string | null = null;
+    let nextIndex = -1;
+    for (let i = 0; i < allTasks.length; i++) {
+      if (!completedSet.has(allTasks[i].id)) {
+        nextTaskId = allTasks[i].id;
+        nextIndex = i;
+        break;
+      }
+    }
+
+    if (nextTaskId === null) {
+      await supabase
+        .from("chat_sessions")
+        .update({ step_status: "completed" })
+        .eq("id", sessionId);
+      return { advanced: true, finished: true, nextStepId: null };
+    }
+
+    await supabase
       .from("chat_sessions")
       .update({
-        current_step_id: nextTask.id,
+        current_step_id: nextTaskId,
         step_index: nextIndex,
         step_status: "teaching",
       })
-      .eq("id", sessionId)
-      .eq("step_index", currentIndex)
-      .select("id");
+      .eq("id", sessionId);
 
-    if (!updated || updated.length === 0) {
-      return { advanced: false, finished: false, nextStepId: null };
-    }
-
-    return { advanced: true, finished: false, nextStepId: nextTask.id };
+    return { advanced: true, finished: false, nextStepId: nextTaskId };
   }
 
   return { advanced: false, finished: false, nextStepId: null };

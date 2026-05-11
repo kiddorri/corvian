@@ -1,6 +1,8 @@
 // Серверная математическая валидация ответа ученика.
 // Используется чтобы Мунин (Haiku) не отклонял эквивалентные формы:
 //   "75%" == "3/4" == "0.75" == "0,75" == "6/8"
+// Также: ответы вида "P(A) = 20/500 = 0,04" — извлекаем все
+// число-подобные подстроки и пробуем каждую пару.
 
 function normalize(s: string): number | null {
   if (typeof s !== "string") return null;
@@ -31,12 +33,44 @@ function normalize(s: string): number | null {
   return Number.isNaN(num) ? null : num;
 }
 
+// Извлечь подстроки которые выглядят как числа: со знаком, дробной частью,
+// дробью через "/", и/или процентом. Пробелы вокруг "/" учитываются.
+function extractNumberLikes(s: string): string[] {
+  if (typeof s !== "string") return [];
+  const re =
+    /-?\d+(?:[.,]\d+)?(?:\s*\/\s*-?\d+(?:[.,]\d+)?)?\s*%?/g;
+  return Array.from(s.matchAll(re), (m) => m[0]);
+}
+
 export function isMathematicallyEqual(
   studentAnswer: string,
   correctAnswer: string,
 ): boolean {
-  const studentVal = normalize(studentAnswer);
-  const correctVal = normalize(correctAnswer);
-  if (studentVal === null || correctVal === null) return false;
-  return Math.abs(studentVal - correctVal) < 0.001;
+  // Быстрый путь: целая строка как число (например ученик написал "3/4").
+  const directS = normalize(studentAnswer);
+  const directC = normalize(correctAnswer);
+  if (
+    directS !== null &&
+    directC !== null &&
+    Math.abs(directS - directC) < 0.001
+  ) {
+    return true;
+  }
+
+  // Общий путь: извлекаем число-подобные из обеих сторон и проверяем все пары.
+  // Покрывает ответы вида "P(A) = 20/500 = 0,04" — выберется 0.04 из обеих.
+  const studentNums = extractNumberLikes(studentAnswer)
+    .map(normalize)
+    .filter((n): n is number => n !== null);
+  const correctNums = extractNumberLikes(correctAnswer)
+    .map(normalize)
+    .filter((n): n is number => n !== null);
+
+  for (const sn of studentNums) {
+    for (const cn of correctNums) {
+      if (Math.abs(sn - cn) < 0.001) return true;
+    }
+  }
+
+  return false;
 }
