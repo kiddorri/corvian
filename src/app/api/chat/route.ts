@@ -342,6 +342,29 @@ export async function POST(req: NextRequest) {
             nextStepId: string | null;
           } = { advanced: false, finished: false, nextStepId: null };
 
+          // Узкий try/catch именно вокруг parser-вызовов, чтобы [PARSER-CRASH]
+          // мог появиться независимо от внешнего [CRITICAL] (диагностика того,
+          // почему [MARKER] лог не доходит до Vercel).
+          console.log("[MARKER-CHECK] about to check markers");
+          try {
+            hasStepDone = parser.hasStepDone();
+            console.log("[MARKER-CHECK] hasStepDone returned:", hasStepDone);
+            hasTaskDone = parser.hasTaskDone();
+            console.log("[MARKER-CHECK] hasTaskDone returned:", hasTaskDone);
+            console.log(
+              "[MARKER] hasStepDone:",
+              hasStepDone,
+              "hasTaskDone:",
+              hasTaskDone,
+              "step_type:",
+              sessionState?.current_step_type,
+              "step_id:",
+              sessionState?.current_step_id,
+            );
+          } catch (parseErr) {
+            console.error("[PARSER-CRASH]", parseErr);
+          }
+
           try {
             hasStepDone = parser.hasStepDone();
             hasTaskDone = parser.hasTaskDone();
