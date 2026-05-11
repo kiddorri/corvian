@@ -41,6 +41,7 @@ export interface BuildPromptParams {
   stepProgress: { total: number; completed: number };
   huginnSummary?: string;
   isVariation?: boolean;
+  serverValidatedCorrect?: boolean;
 }
 
 export function buildSystemPrompt(params: BuildPromptParams): string {
@@ -54,6 +55,7 @@ export function buildSystemPrompt(params: BuildPromptParams): string {
     stepProgress,
     huginnSummary,
     isVariation,
+    serverValidatedCorrect,
   } = params;
 
   if (raven === "huginn") {
@@ -149,5 +151,11 @@ ${currentTaskBlock}
 - НИКОГДА не ставь <task_done/> в сообщении где ты ВЫДАЁШЬ задачу. Сначала ученик отвечает, потом проверяешь и ставишь маркер.
 - НИКОГДА не ставь <task_done/> в сообщении где ты задаёшь наводящий вопрос или даёшь подсказку — жди ответа.
 - НИКОГДА не ставь <task_done/> в первом сообщении сессии (после приветствия).
-- Ставь маркер ТОЛЬКО после того как ученик дал ответ И ты убедился что он правильный.`;
+- Ставь маркер ТОЛЬКО после того как ученик дал ответ И ты убедился что он правильный.${
+    serverValidatedCorrect
+      ? `
+
+СИСТЕМНАЯ ПРОВЕРКА: Ответ ученика математически ВЕРНЫЙ (проверено сервером — эквивалентность учитывает дроби, проценты, десятичные). ОБЯЗАТЕЛЬНО прими ответ, похвали и поставь <task_done/>.`
+      : ""
+  }`;
 }

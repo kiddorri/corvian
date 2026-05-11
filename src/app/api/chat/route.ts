@@ -9,6 +9,7 @@ import {
   type SessionState,
 } from "@/lib/services/lesson-engine";
 import { generateTaskVariation } from "@/lib/services/task-generator";
+import { isMathematicallyEqual } from "@/lib/services/math-validator";
 
 export const maxDuration = 60;
 
@@ -244,6 +245,24 @@ export async function POST(req: NextRequest) {
           }
         : currentTaskData;
 
+    // Серверная проверка эквивалентности ответа (75% == 3/4 == 0.75 == 6/8).
+    // Только для Мунина — если есть текущая задача и сообщение ученика похоже
+    // на числовой ответ. Передаётся в системный промпт как "проверено сервером",
+    // чтобы Haiku не отклонил эквивалентную форму.
+    const serverValidatedCorrect =
+      raven === "muninn" &&
+      promptCurrentTask !== null &&
+      typeof message === "string" &&
+      isMathematicallyEqual(message, promptCurrentTask.answer);
+    console.log(
+      "[MATH-CHECK] serverValidatedCorrect:",
+      serverValidatedCorrect,
+      "student:",
+      typeof message === "string" ? message.slice(0, 40) : "<non-string>",
+      "expected:",
+      promptCurrentTask?.answer,
+    );
+
     const systemPrompt = buildSystemPrompt({
       raven,
       topic: topic as Topic | null,
@@ -257,6 +276,7 @@ export async function POST(req: NextRequest) {
       // already presented via the second stream on the prior turn). Never
       // re-tell the model to "give the variation" here.
       isVariation: false,
+      serverValidatedCorrect,
     });
 
     await supabase
