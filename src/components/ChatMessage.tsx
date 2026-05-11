@@ -174,7 +174,10 @@ function parseBlocks(text: string): ReactNode[] {
 function parseInline(text: string): ReactNode[] {
   const out: ReactNode[] = [];
   let k = 0;
-  const re = /(\$[^$\n]+\$)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(`[^`\n]+`)/g;
+  // ВАЖНО: $$...$$ ПЕРВЫМ alternative, иначе \$[^$\n]+\$ пожрёт внутренний
+  // $...$ из $$x = 5$$ и оставит наружные доллары как литеральный текст.
+  const re =
+    /(\$\$[^$\n]+?\$\$)|(\$[^$\n]+?\$)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(`[^`\n]+`)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -183,7 +186,19 @@ function parseInline(text: string): ReactNode[] {
       out.push(text.slice(lastIndex, match.index));
     }
     const token = match[0];
-    if (token.startsWith("$")) {
+    if (token.startsWith("$$")) {
+      try {
+        const html = katex.renderToString(token.slice(2, -2), {
+          throwOnError: false,
+          displayMode: false,
+        });
+        out.push(
+          <span key={k++} dangerouslySetInnerHTML={{ __html: html }} />,
+        );
+      } catch {
+        out.push(token);
+      }
+    } else if (token.startsWith("$")) {
       try {
         const html = katex.renderToString(token.slice(1, -1), {
           throwOnError: false,

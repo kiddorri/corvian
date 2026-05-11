@@ -11,7 +11,13 @@ import {
 import { generateTaskVariation } from "@/lib/services/task-generator";
 import { isMathematicallyEqual } from "@/lib/services/math-validator";
 
-export const maxDuration = 60;
+// 120s — нужно чтобы основной Haiku-стрим (до 30s) + Sonnet генерация вариации
+// (до 15s) + второй Haiku-стрим для вариации (до 20s) ВСЕ успели в одном SSE
+// response. На 60s функция падала по timeout: newBubble уходил клиенту, но
+// текст вариации не успевал — ученик видел пустой пузырь и шёл писать новое
+// сообщение, на котором activeVariation подгружалась из БД и вариация
+// показывалась только тогда.
+export const maxDuration = 120;
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
