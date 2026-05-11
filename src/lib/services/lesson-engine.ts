@@ -118,6 +118,16 @@ export async function advanceStep(
       .order("sort_order", { ascending: true });
 
     const nextIndex = currentIndex + 1;
+    console.log(
+      "[ADVANCE-DEBUG] raven:huginn step_index:",
+      currentIndex,
+      "totalSteps:",
+      allGoals?.length ?? 0,
+      "nextIndex:",
+      nextIndex,
+      "willFinish:",
+      !allGoals || nextIndex >= allGoals.length,
+    );
 
     if (!allGoals || nextIndex >= allGoals.length) {
       const { data: finished } = await supabase
@@ -166,6 +176,16 @@ export async function advanceStep(
       .order("sort_order", { ascending: true });
 
     const nextIndex = currentIndex + 1;
+    console.log(
+      "[ADVANCE-DEBUG] raven:muninn step_index:",
+      currentIndex,
+      "totalSteps:",
+      allTasks?.length ?? 0,
+      "nextIndex:",
+      nextIndex,
+      "willFinish:",
+      !allTasks || nextIndex >= allTasks.length,
+    );
 
     if (!allTasks || nextIndex >= allTasks.length) {
       const { data: finished } = await supabase
