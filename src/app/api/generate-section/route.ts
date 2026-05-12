@@ -8,6 +8,75 @@ const anthropic = new Anthropic({
 
 export const maxDuration = 300;
 
+// Парсер JSON с восстановлением после обрыва (stop_reason: max_tokens).
+// Идёт по тексту посимвольно, ведёт стек скобок и запоминает последнюю
+// «безопасную» позицию — конец полностью закрытого объекта внутри массива
+// или закрытого массива внутри объекта. Дорезает остаток и закрывает
+// нужные скобки. Если ничего безопасного нет — null.
+function tryParseTruncatedJson(text: string): unknown | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  const raw = text.slice(start);
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // упало — попробуем восстановить
+  }
+
+  const stack: string[] = [];
+  let inStr = false;
+  let escape = false;
+  let lastSafeEnd = -1;
+  let lastSafeStack: string[] = [];
+
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === "\\") {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inStr = !inStr;
+      continue;
+    }
+    if (inStr) continue;
+    if (c === "{" || c === "[") {
+      stack.push(c);
+    } else if (c === "}") {
+      if (stack[stack.length - 1] !== "{") break;
+      stack.pop();
+      if (stack[stack.length - 1] === "[") {
+        lastSafeEnd = i + 1;
+        lastSafeStack = [...stack];
+      }
+    } else if (c === "]") {
+      if (stack[stack.length - 1] !== "[") break;
+      stack.pop();
+      if (stack[stack.length - 1] === "{") {
+        lastSafeEnd = i + 1;
+        lastSafeStack = [...stack];
+      }
+    }
+  }
+
+  if (lastSafeEnd <= 0) return null;
+
+  let candidate = raw.slice(0, lastSafeEnd);
+  for (let i = lastSafeStack.length - 1; i >= 0; i--) {
+    candidate += lastSafeStack[i] === "{" ? "}" : "]";
+  }
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: Request) {
   try {
     let classId: string;
@@ -187,7 +256,7 @@ export async function POST(req: Request) {
 
     const step1Response = await anthropic.messages.create(
       {
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
         max_tokens: 4096,
         messages: [{ role: "user", content: step1Content }],
       },
@@ -265,6 +334,8 @@ export async function POST(req: Request) {
               type: "text",
               text: `Ты — эксперт по образованию. Создай полный план урока по теме.
 
+Генерируй МАКСИМУМ 4 huginn_steps и 7 tasks. Theory — максимум 300 слов. Будь лаконичным.
+
 Входные данные:
 - Тема: ${topicOutline.name}
 - Цели: ${JSON.stringify(topicOutline.learning_goals)}
@@ -275,7 +346,7 @@ export async function POST(req: Request) {
 
 Верни JSON (без markdown):
 {
-  "theory": "Подробное объяснение темы в markdown+LaTeX. 300-500 слов. Используй $...$ для инлайн формул, $$...$$ для блочных.",
+  "theory": "Объяснение темы в markdown+LaTeX. МАКСИМУМ 300 слов. Используй $...$ для инлайн формул, $$...$$ для блочных.",
 
   "huginn_steps": [
     {
@@ -304,10 +375,10 @@ export async function POST(req: Request) {
 - template, params, answer_formula — ТОЛЬКО для математических/числовых задач
 - Для нечисловых задач (история, биология) — template/params/answer_formula = null
 - answer должен быть МАКСИМАЛЬНО простым: число, дробь, или 1-3 слова
-- 5-10 задач, difficulty от 1 до 5
+- МАКСИМУМ 7 задач, difficulty от 1 до 5
 
 Правила для huginn_steps:
-- По одному шагу на каждую цель из learning_goals
+- МАКСИМУМ 4 шага. Если целей больше — объедини связанные в один шаг
 - check_question должен иметь ОДНОЗНАЧНЫЙ ответ
 - correct_answer — точный, проверяемый ответ
 - explanation — НЕ весь урок, а конкретное объяснение этой цели
@@ -319,28 +390,60 @@ export async function POST(req: Request) {
           const step2Response = await anthropic.messages.create(
             {
               model: "claude-sonnet-4-6",
-              max_tokens: 4096,
+              max_tokens: 8192,
               messages: [{ role: "user", content: step2Content }],
             },
             { timeout: 60000 },
           );
-
-          if (step2Response.stop_reason === "max_tokens") {
-            throw new Error("Response truncated (max_tokens)");
-          }
 
           const step2Text = step2Response.content
             .filter((b): b is Anthropic.TextBlock => b.type === "text")
             .map((b) => b.text)
             .join("");
 
+          const truncatedByTokens =
+            step2Response.stop_reason === "max_tokens";
+
           console.log(
             `[STEP2-SONNET] Topic: "${topicOutline.name}", stop_reason: ${step2Response.stop_reason}, text_len: ${step2Text.length}`,
           );
 
-          const step2Match = step2Text.match(/\{[\s\S]*\}/);
-          if (step2Match) {
-            const topicDetail = JSON.parse(step2Match[0]);
+          // Сначала пробуем обычный greedy-match. Если не парсится или ответ
+          // был обрезан по max_tokens — восстанавливаем частичный JSON через
+          // tryParseTruncatedJson (закрывает скобки до последнего безопасного
+          // элемента массива).
+          let topicDetail: {
+            theory?: string;
+            huginn_steps?: HuginnStep[];
+            tasks?: TaskPlan[];
+          } | null = null;
+
+          if (!truncatedByTokens) {
+            const step2Match = step2Text.match(/\{[\s\S]*\}/);
+            if (step2Match) {
+              try {
+                topicDetail = JSON.parse(step2Match[0]);
+              } catch {
+                topicDetail = null;
+              }
+            }
+          }
+
+          if (!topicDetail) {
+            const repaired = tryParseTruncatedJson(step2Text);
+            if (repaired && typeof repaired === "object") {
+              console.warn(
+                `[STEP2-SONNET] Recovered truncated JSON for "${topicOutline.name}"`,
+              );
+              topicDetail = repaired as {
+                theory?: string;
+                huginn_steps?: HuginnStep[];
+                tasks?: TaskPlan[];
+              };
+            }
+          }
+
+          if (topicDetail) {
             return {
               name: topicOutline.name,
               learning_goals: topicOutline.learning_goals,
@@ -350,7 +453,11 @@ export async function POST(req: Request) {
             };
           }
 
-          throw new Error("No JSON in response");
+          throw new Error(
+            truncatedByTokens
+              ? "Response truncated (max_tokens) and unrecoverable"
+              : "No JSON in response",
+          );
         }),
       );
 
@@ -369,7 +476,6 @@ export async function POST(req: Request) {
         );
 
         try {
-          const goalCount = topicOutline.learning_goals.length;
           const retryResponse = await anthropic.messages.create(
             {
               model: "claude-sonnet-4-6",
@@ -377,18 +483,18 @@ export async function POST(req: Request) {
               messages: [
                 {
                   role: "user",
-                  content: `МАТЕРИАЛЫ:\n${compactFileText.slice(0, 4000)}\n\nСоздай план урока. Тема: "${topicOutline.name}". Класс: ${grade}, ${subject}.
+                  content: `МАТЕРИАЛЫ:\n${compactFileText.slice(0, 4000)}\n\nСоздай ЛАКОНИЧНЫЙ план урока. Тема: "${topicOutline.name}". Класс: ${grade}, ${subject}.
 
-Цели (${goalCount}): ${topicOutline.learning_goals.join("; ")}
+Цели: ${topicOutline.learning_goals.join("; ")}
 
 Верни ТОЛЬКО JSON:
 {
-  "theory": "теория 150-300 слов с LaTeX",
+  "theory": "теория МАКСИМУМ 150 слов с LaTeX",
   "huginn_steps": [{"goal":"текст цели как выше","explanation":"...","check_question":"вопрос с числами","correct_answer":"...","hint":"..."}],
   "tasks": [{"question":"задача","answer":"...","steps":"решение","difficulty":1,"template":null,"params":null,"answer_formula":null}]
 }
 
-ПО ОДНОМУ huginn_step на каждую цель (всего ${goalCount}). 3-5 задач. Русский язык.`,
+РОВНО 3 huginn_steps. РОВНО 3 задач. Theory — 150 слов максимум. Русский язык.`,
                 },
               ],
             },
@@ -401,15 +507,42 @@ export async function POST(req: Request) {
           console.log(
             `[RETRY-SONNET] Topic: "${topicOutline.name}", stop_reason: ${retryResponse.stop_reason}, text_len: ${retryText.length}`,
           );
-          const retryMatch = retryText.match(/\{[\s\S]*\}/);
-          if (retryMatch) {
-            const parsed = JSON.parse(retryMatch[0]);
+          let parsedRetry: {
+            theory?: string;
+            huginn_steps?: HuginnStep[];
+            tasks?: TaskPlan[];
+          } | null = null;
+          if (retryResponse.stop_reason !== "max_tokens") {
+            const retryMatch = retryText.match(/\{[\s\S]*\}/);
+            if (retryMatch) {
+              try {
+                parsedRetry = JSON.parse(retryMatch[0]);
+              } catch {
+                parsedRetry = null;
+              }
+            }
+          }
+          if (!parsedRetry) {
+            const repaired = tryParseTruncatedJson(retryText);
+            if (repaired && typeof repaired === "object") {
+              console.warn(
+                `[RETRY-SONNET] Recovered truncated JSON for "${topicOutline.name}"`,
+              );
+              parsedRetry = repaired as {
+                theory?: string;
+                huginn_steps?: HuginnStep[];
+                tasks?: TaskPlan[];
+              };
+            }
+          }
+
+          if (parsedRetry) {
             fullTopics.push({
               name: topicOutline.name,
               learning_goals: topicOutline.learning_goals,
-              theory: parsed.theory || "",
-              huginn_steps: (parsed.huginn_steps || []) as HuginnStep[],
-              tasks: (parsed.tasks || []) as TaskPlan[],
+              theory: parsedRetry.theory || "",
+              huginn_steps: (parsedRetry.huginn_steps || []) as HuginnStep[],
+              tasks: (parsedRetry.tasks || []) as TaskPlan[],
             });
           } else {
             console.warn(
