@@ -130,7 +130,7 @@ export async function POST(req: Request) {
 
     // Fallback: при PDF-only загрузке parseFile возвращает пустой text для PDF,
     // и compactFileText содержит только метки [Файл: name]. Дополняем именами
-    // файлов и контекстом раздела чтобы Haiku имел подсказки для генерации.
+    // файлов и контекстом раздела чтобы Sonnet имел подсказки для генерации.
     if (compactFileText.length < 200) {
       const fileNames: string[] = [];
       for (const block of fileBlocks) {
@@ -148,7 +148,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // ========== ЭТАП 1: Определить темы ==========
+    // ========== ЭТАП 1: Определить темы (Sonnet) ==========
     const step1Content: Anthropic.ContentBlockParam[] = [
       ...fileBlocks,
       {
@@ -225,13 +225,29 @@ export async function POST(req: Request) {
     const topicsToProcess = topicsPlan.topics.slice(0, 6);
     const truncated = topicsPlan.topics.length > topicsToProcess.length;
 
-    // ========== ЭТАП 2: Полные планы для каждой темы ==========
+    // ========== ЭТАП 2: Полные планы для каждой темы (Sonnet) ==========
+    type HuginnStep = {
+      goal: string;
+      explanation: string;
+      check_question: string;
+      correct_answer: string;
+      hint: string;
+    };
+    type TaskPlan = {
+      question: string;
+      answer: string;
+      steps: string;
+      difficulty: number;
+      template: string | null;
+      params: Record<string, unknown> | null;
+      answer_formula: string | null;
+    };
     const fullTopics: Array<{
       name: string;
       learning_goals: string[];
       theory: string;
-      huginn_steps: unknown[];
-      tasks: unknown[];
+      huginn_steps: HuginnStep[];
+      tasks: TaskPlan[];
     }> = [];
 
     const batchSize = 2;
@@ -247,43 +263,66 @@ export async function POST(req: Request) {
             },
             {
               type: "text",
-              text: `Ты — методист. Создай ПОЛНЫЙ план урока для ОДНОЙ темы.
+              text: `Ты — эксперт по образованию. Создай полный план урока по теме.
 
-ТЕМА: ${topicOutline.name}
-ОПИСАНИЕ: ${topicOutline.description || ""}
-РАЗДЕЛ: ${sectionName}
-КЛАСС: ${grade}
-ПРЕДМЕТ: ${subject}
+Входные данные:
+- Тема: ${topicOutline.name}
+- Цели: ${JSON.stringify(topicOutline.learning_goals)}
+- Раздел: ${sectionName}
+- Класс: ${grade}
+- Предмет: ${subject}
+- Материал учителя: см. блок "МАТЕРИАЛЫ ИЗ ФАЙЛОВ" выше
 
-ЦЕЛИ ОБУЧЕНИЯ:
-${topicOutline.learning_goals.map((g, idx) => `${idx + 1}. ${g}`).join("\n")}
-
-Верни ТОЛЬКО валидный JSON:
-
+Верни JSON (без markdown):
 {
-  "theory": "Теоретический материал. Markdown + LaTeX. 200-400 слов.",
+  "theory": "Подробное объяснение темы в markdown+LaTeX. 300-500 слов. Используй $...$ для инлайн формул, $$...$$ для блочных.",
+
   "huginn_steps": [
-    {"explanation": "Что объяснить", "question": "Вопрос с числами", "correct_answer": "Ответ", "hint": "Подсказка"}
+    {
+      "goal": "текст цели (точно как в learning_goals)",
+      "explanation": "Что Хугин должен объяснить ученику. 2-3 предложения. Конкретно, с примерами.",
+      "check_question": "Проверочный вопрос с ЧИСЛОВЫМ ответом если возможно",
+      "correct_answer": "Точный ответ. Для чисел — одно число или дробь.",
+      "hint": "Подсказка если ученик ответит неправильно"
+    }
   ],
+
   "tasks": [
-    {"question": "Задача с числами", "answer": "Ответ", "steps": "Решение", "difficulty": 1}
+    {
+      "question": "Текст задачи",
+      "answer": "Точный ответ (одно число, дробь или короткая фраза)",
+      "steps": "Пошаговое решение для подсказок",
+      "difficulty": 1,
+      "template": "{a} + {b} = ?",
+      "params": {"a": [1, 100], "b": [1, 100]},
+      "answer_formula": "a + b"
+    }
   ]
 }
 
-ПРАВИЛА:
-- huginn_steps: 5-8 шагов
-- tasks: 5-10 задач, difficulty 1-5
-- Конкретные числа, LaTeX, русский язык`,
+Правила для tasks:
+- template, params, answer_formula — ТОЛЬКО для математических/числовых задач
+- Для нечисловых задач (история, биология) — template/params/answer_formula = null
+- answer должен быть МАКСИМАЛЬНО простым: число, дробь, или 1-3 слова
+- 5-10 задач, difficulty от 1 до 5
+
+Правила для huginn_steps:
+- По одному шагу на каждую цель из learning_goals
+- check_question должен иметь ОДНОЗНАЧНЫЙ ответ
+- correct_answer — точный, проверяемый ответ
+- explanation — НЕ весь урок, а конкретное объяснение этой цели
+
+Язык: русский.`,
             },
           ];
 
           const step2Response = await anthropic.messages.create(
             {
-              model: "claude-haiku-4-5-20251001",
+              model: "claude-sonnet-4-6",
               max_tokens: 4096,
               messages: [{ role: "user", content: step2Content }],
             },
-            { timeout: 55000 },
+            { timeout: 60000 },
           );
 
           if (step2Response.stop_reason === "max_tokens") {
@@ -296,7 +335,7 @@ ${topicOutline.learning_goals.map((g, idx) => `${idx + 1}. ${g}`).join("\n")}
             .join("");
 
           console.log(
-            `[STEP2] Topic: "${topicOutline.name}", stop_reason: ${step2Response.stop_reason}, text_len: ${step2Text.length}`,
+            `[STEP2-SONNET] Topic: "${topicOutline.name}", stop_reason: ${step2Response.stop_reason}, text_len: ${step2Text.length}`,
           );
 
           const step2Match = step2Text.match(/\{[\s\S]*\}/);
@@ -306,8 +345,8 @@ ${topicOutline.learning_goals.map((g, idx) => `${idx + 1}. ${g}`).join("\n")}
               name: topicOutline.name,
               learning_goals: topicOutline.learning_goals,
               theory: topicDetail.theory || "",
-              huginn_steps: topicDetail.huginn_steps || [],
-              tasks: topicDetail.tasks || [],
+              huginn_steps: (topicDetail.huginn_steps || []) as HuginnStep[],
+              tasks: (topicDetail.tasks || []) as TaskPlan[],
             };
           }
 
@@ -330,43 +369,47 @@ ${topicOutline.learning_goals.map((g, idx) => `${idx + 1}. ${g}`).join("\n")}
         );
 
         try {
+          const goalCount = topicOutline.learning_goals.length;
           const retryResponse = await anthropic.messages.create(
             {
-              model: "claude-haiku-4-5-20251001",
+              model: "claude-sonnet-4-6",
               max_tokens: 4096,
               messages: [
                 {
                   role: "user",
                   content: `МАТЕРИАЛЫ:\n${compactFileText.slice(0, 4000)}\n\nСоздай план урока. Тема: "${topicOutline.name}". Класс: ${grade}, ${subject}.
 
-Цели: ${topicOutline.learning_goals.join("; ")}
+Цели (${goalCount}): ${topicOutline.learning_goals.join("; ")}
 
 Верни ТОЛЬКО JSON:
 {
   "theory": "теория 150-300 слов с LaTeX",
-  "huginn_steps": [{"explanation":"...","question":"вопрос с числами","correct_answer":"...","hint":"..."}],
-  "tasks": [{"question":"задача с числами","answer":"...","steps":"решение","difficulty":1}]
+  "huginn_steps": [{"goal":"текст цели как выше","explanation":"...","check_question":"вопрос с числами","correct_answer":"...","hint":"..."}],
+  "tasks": [{"question":"задача","answer":"...","steps":"решение","difficulty":1,"template":null,"params":null,"answer_formula":null}]
 }
 
-5 шагов, 5 задач. Русский язык.`,
+ПО ОДНОМУ huginn_step на каждую цель (всего ${goalCount}). 3-5 задач. Русский язык.`,
                 },
               ],
             },
-            { timeout: 45000 },
+            { timeout: 55000 },
           );
           const retryText = retryResponse.content
             .filter((b): b is Anthropic.TextBlock => b.type === "text")
             .map((b) => b.text)
             .join("");
           console.log(
-            `[RETRY] Topic: "${topicOutline.name}", stop_reason: ${retryResponse.stop_reason}, text_len: ${retryText.length}`,
+            `[RETRY-SONNET] Topic: "${topicOutline.name}", stop_reason: ${retryResponse.stop_reason}, text_len: ${retryText.length}`,
           );
           const retryMatch = retryText.match(/\{[\s\S]*\}/);
           if (retryMatch) {
+            const parsed = JSON.parse(retryMatch[0]);
             fullTopics.push({
               name: topicOutline.name,
               learning_goals: topicOutline.learning_goals,
-              ...JSON.parse(retryMatch[0]),
+              theory: parsed.theory || "",
+              huginn_steps: (parsed.huginn_steps || []) as HuginnStep[],
+              tasks: (parsed.tasks || []) as TaskPlan[],
             });
           } else {
             console.warn(

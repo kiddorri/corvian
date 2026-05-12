@@ -24,11 +24,21 @@ export interface PromptCurrentGoal {
   text: string;
 }
 
+export interface PromptCurrentStep {
+  explanation: string;
+  check_question: string;
+  correct_answer: string;
+  hint: string | null;
+}
+
 export interface PromptCurrentTask {
   id: string;
   question: string;
   answer: string;
   steps: string | null;
+  template?: string | null;
+  params?: Record<string, unknown> | null;
+  answer_formula?: string | null;
 }
 
 export interface BuildPromptParams {
@@ -37,6 +47,7 @@ export interface BuildPromptParams {
   calibration: PromptCalibration | null;
   goals: PromptGoal[];
   currentGoal: PromptCurrentGoal | null;
+  currentStep?: PromptCurrentStep | null;
   currentTask: PromptCurrentTask | null;
   stepProgress: { total: number; completed: number };
   huginnSummary?: string;
@@ -51,6 +62,7 @@ export function buildSystemPrompt(params: BuildPromptParams): string {
     calibration,
     goals,
     currentGoal,
+    currentStep,
     currentTask,
     stepProgress,
     huginnSummary,
@@ -74,13 +86,34 @@ export function buildSystemPrompt(params: BuildPromptParams): string {
             .join("\n")}`
         : "";
 
+    // Структурированный план шага (новый формат) или текстовые
+    // инструкции из калибровки (старый fallback).
+    const stepPlanBlock = currentStep
+      ? `
+ПЛАН ОБЪЯСНЕНИЯ ЭТОЙ ЦЕЛИ:
+Объясни ученику: ${currentStep.explanation}
+
+ПРОВЕРОЧНЫЙ ВОПРОС (задай его после объяснения):
+${currentStep.check_question}
+
+ПРАВИЛЬНЫЙ ОТВЕТ (не показывай ученику):
+${currentStep.correct_answer}
+
+ПОДСКАЗКА (дай если ученик ошибся):
+${currentStep.hint ?? ""}
+
+Когда ученик правильно ответил на проверочный вопрос — поставь <step_done/>`
+      : calibration?.huginn_instructions
+        ? `ИНСТРУКЦИИ УЧИТЕЛЯ:\n${calibration.huginn_instructions}`
+        : "";
+
     return `Ты — Хугин, ворон мысли. AI-тьютор на платформе Corvian.
 
 УЧЕНИК: ${grade} класс, предмет ${subject}.
 ТЕМА: ${topic?.name ?? ""}
 РАЗДЕЛ: ${topic?.section ?? ""}
 ${calibration?.theory_text ? `ТЕОРИЯ:\n${calibration.theory_text}` : ""}
-${calibration?.huginn_instructions ? `ИНСТРУКЦИИ УЧИТЕЛЯ:\n${calibration.huginn_instructions}` : ""}
+${stepPlanBlock}
 ${currentGoalBlock}
 ${goalsOverview}
 
@@ -108,7 +141,13 @@ ${calibration?.allow_humor === false ? "10. Юмор ОТКЛЮЧЁН учите
 - НИКОГДА не ставь <step_done/> в одном сообщении с вопросом — сначала жди ответа ученика, потом ставь маркер в СЛЕДУЮЩЕМ сообщении.
 - НИКОГДА не ставь <step_done/> в первом сообщении сессии (после приветствия ученика).
 - Ставь маркер только когда ученик ответил правильно МИНИМУМ на 2 проверочных вопроса по этой цели.
-- При сомнении — задай ещё один проверочный вопрос вместо маркера.`;
+- При сомнении — задай ещё один проверочный вопрос вместо маркера.${
+      serverValidatedCorrect
+        ? `
+
+СИСТЕМНАЯ ПРОВЕРКА: Ответ ученика математически ВЕРНЫЙ (проверено сервером — эквивалентность учитывает дроби, проценты, десятичные). Прими ответ и похвали. Если это уже второй верный ответ по этой цели — поставь <step_done/>.`
+        : ""
+    }`;
   }
 
   // Мунин
@@ -119,8 +158,20 @@ ${calibration?.allow_humor === false ? "10. Юмор ОТКЛЮЧЁН учите
     ? `Это задача для закрепления. Скажи ученику: "Для закрепления — попробуй похожую:" и дай эту задачу.\n`
     : "";
 
+  // Информация о шаблоне (если задача параметризованная) — пока что просто
+  // отображается в промпте как контекст; генерация вариаций по шаблону —
+  // отдельный этап.
+  const templateBlock =
+    currentTask?.template && currentTask?.answer_formula
+      ? `\nШАБЛОН (для контекста, НЕ показывай ученику): ${currentTask.template}\nФОРМУЛА ОТВЕТА: ${currentTask.answer_formula}${
+          currentTask.params
+            ? `\nДИАПАЗОНЫ ПАРАМЕТРОВ: ${JSON.stringify(currentTask.params)}`
+            : ""
+        }`
+      : "";
+
   const currentTaskBlock = currentTask
-    ? `\nТЕКУЩАЯ ЗАДАЧА:\n${variationPrefix}Вопрос: ${currentTask.question}\nПравильный ответ (НИКОГДА не показывай ученику): ${currentTask.answer}${currentTask.steps ? `\nШаги решения (для подсказок): ${currentTask.steps}` : ""}\n\nПРОГРЕСС: ${stepProgress.completed} из ${stepProgress.total} задач решено.`
+    ? `\nТЕКУЩАЯ ЗАДАЧА:\n${variationPrefix}Вопрос: ${currentTask.question}\nПравильный ответ (НИКОГДА не показывай ученику): ${currentTask.answer}${currentTask.steps ? `\nШаги решения (для подсказок): ${currentTask.steps}` : ""}${templateBlock}\n\nПРОГРЕСС: ${stepProgress.completed} из ${stepProgress.total} задач решено.`
     : "";
 
   return `Ты — Мунин, ворон памяти. AI-тьютор на платформе Corvian.

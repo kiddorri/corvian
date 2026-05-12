@@ -131,11 +131,20 @@ export async function POST(req: NextRequest) {
 
     // Загрузить данные текущего шага
     let currentStepData: { text: string; id: string } | null = null;
+    let currentHuginnStep: {
+      explanation: string;
+      check_question: string;
+      correct_answer: string;
+      hint: string | null;
+    } | null = null;
     let currentTaskData: {
       question: string;
       answer: string;
       steps: string | null;
       id: string;
+      template: string | null;
+      params: Record<string, unknown> | null;
+      answer_formula: string | null;
     } | null = null;
     const stepProgress: { total: number; completed: number } = {
       total: 0,
@@ -153,6 +162,31 @@ export async function POST(req: NextRequest) {
         .single();
       currentStepData = goalData as { id: string; text: string } | null;
 
+      // Структурированный план шага Хугина (новая таблица huginn_steps)
+      if (raven === "huginn") {
+        const { data: stepData } = await supabase
+          .from("huginn_steps")
+          .select("explanation, check_question, correct_answer, hint")
+          .eq("goal_id", sessionState.current_step_id)
+          .order("sort_order", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        if (stepData) {
+          currentHuginnStep = stepData as {
+            explanation: string;
+            check_question: string;
+            correct_answer: string;
+            hint: string | null;
+          };
+        }
+        console.log(
+          "[HUGINN-STEP] loaded:",
+          !!currentHuginnStep,
+          "goal_id:",
+          sessionState.current_step_id,
+        );
+      }
+
       const { data: allGoalProgress } = await supabase
         .from("goal_step_progress")
         .select("status")
@@ -169,7 +203,9 @@ export async function POST(req: NextRequest) {
     ) {
       const { data: taskData } = await supabase
         .from("tasks")
-        .select("id, question, answer, steps")
+        .select(
+          "id, question, answer, steps, template, params, answer_formula",
+        )
         .eq("id", sessionState.current_step_id)
         .single();
       currentTaskData = taskData as {
@@ -177,6 +213,9 @@ export async function POST(req: NextRequest) {
         question: string;
         answer: string;
         steps: string | null;
+        template: string | null;
+        params: Record<string, unknown> | null;
+        answer_formula: string | null;
       } | null;
 
       const { data: allTaskProgress } = await supabase
@@ -252,21 +291,32 @@ export async function POST(req: NextRequest) {
         : currentTaskData;
 
     // Серверная проверка эквивалентности ответа (75% == 3/4 == 0.75 == 6/8).
-    // Только для Мунина — если есть текущая задача и сообщение ученика похоже
-    // на числовой ответ. Передаётся в системный промпт как "проверено сервером",
-    // чтобы Haiku не отклонил эквивалентную форму.
-    const serverValidatedCorrect =
+    // Передаётся в системный промпт как "проверено сервером", чтобы модель
+    // не отклонила эквивалентную форму.
+    //  - Мунин: сравниваем с answer текущей задачи
+    //  - Хугин: сравниваем с correct_answer текущего huginn_step (если есть)
+    const muninnValidated =
       raven === "muninn" &&
       promptCurrentTask !== null &&
       typeof message === "string" &&
       isMathematicallyEqual(message, promptCurrentTask.answer);
+    const huginnValidated =
+      raven === "huginn" &&
+      !!currentHuginnStep?.correct_answer &&
+      typeof message === "string" &&
+      isMathematicallyEqual(message, currentHuginnStep.correct_answer);
+    const serverValidatedCorrect = muninnValidated || huginnValidated;
     console.log(
       "[MATH-CHECK] serverValidatedCorrect:",
       serverValidatedCorrect,
+      "raven:",
+      raven,
       "student:",
       typeof message === "string" ? message.slice(0, 40) : "<non-string>",
       "expected:",
-      promptCurrentTask?.answer,
+      raven === "muninn"
+        ? promptCurrentTask?.answer
+        : currentHuginnStep?.correct_answer,
     );
 
     const systemPrompt = buildSystemPrompt({
@@ -275,6 +325,7 @@ export async function POST(req: NextRequest) {
       calibration: calibration as Calibration | null,
       goals: (goals ?? []) as Goal[],
       currentGoal: currentStepData,
+      currentStep: currentHuginnStep,
       currentTask: promptCurrentTask,
       stepProgress,
       huginnSummary: huginnSummary || undefined,
