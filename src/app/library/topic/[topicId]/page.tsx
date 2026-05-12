@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import { LibraryHeader } from "@/components/library/LibraryHeader";
 import { StartLessonButton } from "@/components/library/StartLessonButton";
+import { FormattedText } from "@/components/FormattedText";
 
 export const dynamic = "force-dynamic";
 
@@ -105,9 +106,9 @@ export default async function TopicPage({ params }: PageProps) {
         {theory && (
           <section className="mt-8 rounded-2xl border border-[rgba(139,92,246,0.15)] bg-[#18181B] p-6">
             <h2 className="text-lg font-bold">О теме</h2>
-            <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-[#A1A1AA]">
-              {theory.length > 500 ? theory.slice(0, 500) + "..." : theory}
-            </p>
+            <div className="mt-3 text-sm leading-relaxed text-[#A1A1AA]">
+              <FormattedText text={theory} variant="prose" className="space-y-3 text-sm leading-relaxed" />
+            </div>
           </section>
         )}
 
@@ -120,7 +121,9 @@ export default async function TopicPage({ params }: PageProps) {
                   <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[rgba(139,92,246,0.15)] text-xs font-bold text-[#8B5CF6]">
                     {i + 1}
                   </span>
-                  <span className="text-sm text-[#E4E4E7]">{g.text}</span>
+                  <div className="text-sm text-[#E4E4E7]">
+                    <FormattedText text={g.text} variant="prose" className="text-sm" />
+                  </div>
                 </li>
               ))}
             </ul>
