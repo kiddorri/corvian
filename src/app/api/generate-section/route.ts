@@ -319,20 +319,24 @@ export async function POST(req: Request) {
       tasks: TaskPlan[];
     }> = [];
 
-    const batchSize = 2;
-    for (let i = 0; i < topicsToProcess.length; i += batchSize) {
-      const batch = topicsToProcess.slice(i, i + batchSize);
+    // ЭТАП 2 идёт ПОСЛЕДОВАТЕЛЬНО — одну тему за раз. Параллельность убрана
+    // чтобы не упираться в FUNCTION_INVOCATION_TIMEOUT и не спамить Anthropic.
+    for (const topicOutline of topicsToProcess) {
+      const tStart = Date.now();
+      console.log("[GENERATE] Starting topic:", topicOutline.name);
 
-      const batchResults = await Promise.allSettled(
-        batch.map(async (topicOutline) => {
-          const step2Content: Anthropic.ContentBlockParam[] = [
-            {
-              type: "text",
-              text: `МАТЕРИАЛЫ ИЗ ФАЙЛОВ:\n\n${compactFileText}`,
-            },
-            {
-              type: "text",
-              text: `Ты — эксперт по образованию. Создай полный план урока по теме.
+      let primaryError: unknown = null;
+      let pushed = false;
+
+      try {
+        const step2Content: Anthropic.ContentBlockParam[] = [
+          {
+            type: "text",
+            text: `МАТЕРИАЛЫ ИЗ ФАЙЛОВ:\n\n${compactFileText}`,
+          },
+          {
+            type: "text",
+            text: `Ты — эксперт по образованию. Создай полный план урока по теме.
 
 Генерируй столько задач сколько есть в материале учителя. Если в файлах есть задачи разных уровней (A/B/C или лёгкие/средние/сложные) — сохрани эту структуру. Максимум 5 huginn_steps и 10 tasks. Theory — максимум 400 слов.
 
@@ -385,97 +389,88 @@ export async function POST(req: Request) {
 - explanation — НЕ весь урок, а конкретное объяснение этой цели
 
 Язык: русский.`,
-            },
-          ];
+          },
+        ];
 
-          const step2Response = await anthropic.messages.create(
-            {
-              model: "claude-sonnet-4-6",
-              max_tokens: 8192,
-              messages: [{ role: "user", content: step2Content }],
-            },
-            { timeout: 60000 },
-          );
+        const step2Response = await anthropic.messages.create(
+          {
+            model: "claude-sonnet-4-6",
+            max_tokens: 8192,
+            messages: [{ role: "user", content: step2Content }],
+          },
+          { timeout: 60000 },
+        );
 
-          const step2Text = step2Response.content
-            .filter((b): b is Anthropic.TextBlock => b.type === "text")
-            .map((b) => b.text)
-            .join("");
+        const step2Text = step2Response.content
+          .filter((b): b is Anthropic.TextBlock => b.type === "text")
+          .map((b) => b.text)
+          .join("");
 
-          const truncatedByTokens =
-            step2Response.stop_reason === "max_tokens";
+        const truncatedByTokens =
+          step2Response.stop_reason === "max_tokens";
 
-          console.log(
-            `[STEP2-SONNET] Topic: "${topicOutline.name}", stop_reason: ${step2Response.stop_reason}, text_len: ${step2Text.length}`,
-          );
+        console.log(
+          `[STEP2-SONNET] Topic: "${topicOutline.name}", stop_reason: ${step2Response.stop_reason}, text_len: ${step2Text.length}`,
+        );
 
-          // Сначала пробуем обычный greedy-match. Если не парсится или ответ
-          // был обрезан по max_tokens — восстанавливаем частичный JSON через
-          // tryParseTruncatedJson (закрывает скобки до последнего безопасного
-          // элемента массива).
-          let topicDetail: {
-            theory?: string;
-            huginn_steps?: HuginnStep[];
-            tasks?: TaskPlan[];
-          } | null = null;
+        // Сначала пробуем обычный greedy-match. Если не парсится или ответ
+        // был обрезан по max_tokens — восстанавливаем частичный JSON через
+        // tryParseTruncatedJson (закрывает скобки до последнего безопасного
+        // элемента массива).
+        let topicDetail: {
+          theory?: string;
+          huginn_steps?: HuginnStep[];
+          tasks?: TaskPlan[];
+        } | null = null;
 
-          if (!truncatedByTokens) {
-            const step2Match = step2Text.match(/\{[\s\S]*\}/);
-            if (step2Match) {
-              try {
-                topicDetail = JSON.parse(step2Match[0]);
-              } catch {
-                topicDetail = null;
-              }
+        if (!truncatedByTokens) {
+          const step2Match = step2Text.match(/\{[\s\S]*\}/);
+          if (step2Match) {
+            try {
+              topicDetail = JSON.parse(step2Match[0]);
+            } catch {
+              topicDetail = null;
             }
           }
+        }
 
-          if (!topicDetail) {
-            const repaired = tryParseTruncatedJson(step2Text);
-            if (repaired && typeof repaired === "object") {
-              console.warn(
-                `[STEP2-SONNET] Recovered truncated JSON for "${topicOutline.name}"`,
-              );
-              topicDetail = repaired as {
-                theory?: string;
-                huginn_steps?: HuginnStep[];
-                tasks?: TaskPlan[];
-              };
-            }
-          }
-
-          if (topicDetail) {
-            return {
-              name: topicOutline.name,
-              learning_goals: topicOutline.learning_goals,
-              theory: topicDetail.theory || "",
-              huginn_steps: (topicDetail.huginn_steps || []) as HuginnStep[],
-              tasks: (topicDetail.tasks || []) as TaskPlan[],
+        if (!topicDetail) {
+          const repaired = tryParseTruncatedJson(step2Text);
+          if (repaired && typeof repaired === "object") {
+            console.warn(
+              `[STEP2-SONNET] Recovered truncated JSON for "${topicOutline.name}"`,
+            );
+            topicDetail = repaired as {
+              theory?: string;
+              huginn_steps?: HuginnStep[];
+              tasks?: TaskPlan[];
             };
           }
+        }
 
-          throw new Error(
+        if (topicDetail) {
+          fullTopics.push({
+            name: topicOutline.name,
+            learning_goals: topicOutline.learning_goals,
+            theory: topicDetail.theory || "",
+            huginn_steps: (topicDetail.huginn_steps || []) as HuginnStep[],
+            tasks: (topicDetail.tasks || []) as TaskPlan[],
+          });
+          pushed = true;
+        } else {
+          primaryError = new Error(
             truncatedByTokens
               ? "Response truncated (max_tokens) and unrecoverable"
               : "No JSON in response",
           );
-        }),
-      );
-
-      for (let j = 0; j < batchResults.length; j++) {
-        const result = batchResults[j];
-        const topicOutline = batch[j];
-
-        if (result.status === "fulfilled") {
-          fullTopics.push(result.value);
-          continue;
         }
+      } catch (err) {
+        primaryError = err;
+      }
 
-        console.error(
-          `Failed for topic: ${topicOutline.name}`,
-          result.reason,
-        );
-
+      // Retry с уменьшенным промптом если основная генерация не дала результата
+      if (!pushed) {
+        console.error(`Failed for topic: ${topicOutline.name}`, primaryError);
         try {
           const retryResponse = await anthropic.messages.create(
             {
@@ -574,6 +569,14 @@ export async function POST(req: Request) {
           });
         }
       }
+
+      console.log(
+        "[GENERATE] Finished topic:",
+        topicOutline.name,
+        "in",
+        Date.now() - tStart,
+        "ms",
+      );
     }
 
     return NextResponse.json({
