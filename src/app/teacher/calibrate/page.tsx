@@ -19,8 +19,9 @@ type BulkTopicPlan = {
   theory: string;
   learning_goals: string[];
   huginn_steps: {
+    goal: string;
     explanation: string;
-    question: string;
+    check_question: string;
     correct_answer: string;
     hint: string;
   }[];
@@ -29,6 +30,9 @@ type BulkTopicPlan = {
     answer: string;
     steps?: string;
     difficulty: number;
+    template?: string | null;
+    params?: Record<string, unknown> | null;
+    answer_formula?: string | null;
   }[];
 };
 
@@ -79,6 +83,7 @@ export default function CalibratePage() {
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [bulkProgress, setBulkProgress] = useState("");
   const [bulkPlan, setBulkPlan] = useState<BulkPlan | null>(null);
+  const [bulkOutline, setBulkOutline] = useState<string[]>([]);
   const [bulkApplying, setBulkApplying] = useState(false);
 
   useEffect(() => {
@@ -358,23 +363,103 @@ export default function CalibratePage() {
         });
       }
 
-      const responseText = await res.text();
-
-      let data: { error?: string } & BulkPlan;
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        throw new Error(responseText.slice(0, 300) || `HTTP ${res.status}`);
+      if (!res.ok) {
+        // 4xx до начала стрима — ответ JSON
+        let errMsg = `HTTP ${res.status}`;
+        try {
+          const errData = await res.json();
+          if (errData?.error) errMsg = errData.error;
+        } catch {
+          // ignore
+        }
+        throw new Error(errMsg);
       }
 
-      if (!res.ok || data.error) {
-        throw new Error(data.error || `HTTP ${res.status}`);
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("Стрим недоступен");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let outlineTopics: string[] = [];
+      const collectedTopics: BulkTopicPlan[] = [];
+      let streamError: string | null = null;
+      let doneEvent: { warning?: string; fileCount?: number } | null = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE: события разделены пустой строкой, каждое начинается с "data: "
+        let sepIdx: number;
+        while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
+          const chunk = buffer.slice(0, sepIdx);
+          buffer = buffer.slice(sepIdx + 2);
+          const line = chunk.trim();
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+
+          let event: {
+            type?: string;
+            topics?: string[];
+            index?: number;
+            data?: BulkTopicPlan;
+            message?: string;
+            warning?: string;
+            fileCount?: number;
+            section?: string;
+          };
+          try {
+            event = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+
+          if (event.type === "outline" && Array.isArray(event.topics)) {
+            outlineTopics = event.topics;
+            setBulkOutline(outlineTopics);
+            setBulkProgress(
+              `AI разбил материал на ${outlineTopics.length} тем. Генерирую планы...`,
+            );
+          } else if (
+            event.type === "topic" &&
+            typeof event.index === "number" &&
+            event.data
+          ) {
+            collectedTopics.push(event.data);
+            setBulkProgress(
+              `Тема ${collectedTopics.length}/${outlineTopics.length || "?"}: ${event.data.name}`,
+            );
+            // Прогрессивный апдейт UI — учитель видит темы по мере появления
+            setBulkPlan({
+              section: bulkSectionName.trim(),
+              topics: [...collectedTopics],
+              fileCount: 0,
+            });
+          } else if (event.type === "done") {
+            doneEvent = {
+              warning: event.warning,
+              fileCount: event.fileCount,
+            };
+          } else if (event.type === "error") {
+            streamError = event.message ?? "Ошибка генерации";
+          }
+        }
       }
 
-      setBulkProgress("Готово!");
-      setBulkPlan(data as BulkPlan);
+      if (streamError) throw new Error(streamError);
+
+      setBulkProgress(doneEvent?.warning ? doneEvent.warning : "Готово!");
+      setBulkPlan({
+        section: bulkSectionName.trim(),
+        topics: collectedTopics,
+        fileCount: doneEvent?.fileCount ?? 0,
+      });
     } catch (err) {
       alert("Ошибка: " + (err instanceof Error ? err.message : "неизвестная"));
+      setBulkPlan(null);
+      setBulkOutline([]);
     } finally {
       setBulkGenerating(false);
       setBulkProgress("");
@@ -411,6 +496,7 @@ export default function CalibratePage() {
       alert(`Создано ${data.created?.length ?? 0} тем! Обновляю страницу...`);
       setBulkUploadOpen(false);
       setBulkPlan(null);
+      setBulkOutline([]);
       setBulkFiles([]);
       setBulkSectionName("");
       window.location.reload();
@@ -718,6 +804,7 @@ export default function CalibratePage() {
                   if (bulkGenerating || bulkApplying) return;
                   setBulkUploadOpen(false);
                   setBulkPlan(null);
+                  setBulkOutline([]);
                   setBulkFiles([]);
                   setBulkSectionName("");
                 }}
@@ -830,10 +917,35 @@ export default function CalibratePage() {
                 <p className="mb-4 text-sm text-[#A1A1AA]">
                   AI предлагает{" "}
                   <strong className="text-[#F4F4F5]">
-                    {bulkPlan.topics.length} тем
+                    {bulkOutline.length || bulkPlan.topics.length} тем
                   </strong>{" "}
                   для раздела «{bulkPlan.section}»:
                 </p>
+
+                {bulkGenerating && (
+                  <div className="mb-4">
+                    <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-[#1A1625]">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-[#7C3AED] to-[#A78BFA] transition-all"
+                        style={{
+                          width: `${
+                            bulkOutline.length > 0
+                              ? Math.round(
+                                  (bulkPlan.topics.length /
+                                    bulkOutline.length) *
+                                    100,
+                                )
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </div>
+                    <p className="text-center text-xs text-[#71717A]">
+                      {bulkProgress ||
+                        `${bulkPlan.topics.length} / ${bulkOutline.length} тем готово`}
+                    </p>
+                  </div>
+                )}
 
                 <div className="mb-4 space-y-3">
                   {bulkPlan.topics.map((topic, i) => (
@@ -854,13 +966,33 @@ export default function CalibratePage() {
                       </div>
                     </div>
                   ))}
+
+                  {bulkGenerating &&
+                    bulkOutline
+                      .slice(bulkPlan.topics.length)
+                      .map((name, i) => (
+                        <div
+                          key={`pending-${i}`}
+                          className="rounded-xl border border-dashed border-[rgba(139,92,246,0.1)] bg-[#0C0A14] p-4 opacity-60"
+                        >
+                          <h4 className="mb-1 text-sm font-semibold text-[#71717A]">
+                            {bulkPlan.topics.length + i + 1}. {name}
+                          </h4>
+                          <p className="text-xs text-[#52525B]">
+                            Генерирую план...
+                          </p>
+                        </div>
+                      ))}
                 </div>
 
                 <div className="flex gap-3">
                   <button
                     type="button"
-                    onClick={() => setBulkPlan(null)}
-                    disabled={bulkApplying}
+                    onClick={() => {
+                      setBulkPlan(null);
+                      setBulkOutline([]);
+                    }}
+                    disabled={bulkApplying || bulkGenerating}
                     className="flex-1 rounded-lg border border-[rgba(139,92,246,0.15)] px-4 py-3 text-sm text-[#A1A1AA] hover:text-[#F4F4F5] disabled:opacity-40"
                   >
                     ← Назад
@@ -868,12 +1000,14 @@ export default function CalibratePage() {
                   <button
                     type="button"
                     onClick={handleBulkApply}
-                    disabled={bulkApplying}
+                    disabled={bulkApplying || bulkGenerating}
                     className="flex-1 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] px-4 py-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
                   >
                     {bulkApplying
                       ? "Создаю темы..."
-                      : `✅ Создать ${bulkPlan.topics.length} тем`}
+                      : bulkGenerating
+                        ? "Жду полной генерации..."
+                        : `✅ Создать ${bulkPlan.topics.length} тем`}
                   </button>
                 </div>
               </>
