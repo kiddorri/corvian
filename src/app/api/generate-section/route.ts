@@ -334,7 +334,7 @@ export async function POST(req: Request) {
               type: "text",
               text: `Ты — эксперт по образованию. Создай полный план урока по теме.
 
-Генерируй МАКСИМУМ 4 huginn_steps и 7 tasks. Theory — максимум 300 слов. Будь лаконичным.
+Генерируй столько задач сколько есть в материале учителя. Если в файлах есть задачи разных уровней (A/B/C или лёгкие/средние/сложные) — сохрани эту структуру. Максимум 5 huginn_steps и 10 tasks. Theory — максимум 400 слов.
 
 Входные данные:
 - Тема: ${topicOutline.name}
@@ -346,7 +346,7 @@ export async function POST(req: Request) {
 
 Верни JSON (без markdown):
 {
-  "theory": "Объяснение темы в markdown+LaTeX. МАКСИМУМ 300 слов. Используй $...$ для инлайн формул, $$...$$ для блочных.",
+  "theory": "Объяснение темы в markdown+LaTeX. МАКСИМУМ 400 слов. Используй $...$ для инлайн формул, $$...$$ для блочных.",
 
   "huginn_steps": [
     {
@@ -375,10 +375,11 @@ export async function POST(req: Request) {
 - template, params, answer_formula — ТОЛЬКО для математических/числовых задач
 - Для нечисловых задач (история, биология) — template/params/answer_formula = null
 - answer должен быть МАКСИМАЛЬНО простым: число, дробь, или 1-3 слова
-- МАКСИМУМ 7 задач, difficulty от 1 до 5
+- Бери задачи из материала учителя. Если структура A/B/C (или лёгкие/средние/сложные) — сохраняй порядок и маппи в difficulty (A=1-2, B=3, C=4-5).
+- МАКСИМУМ 10 задач, difficulty от 1 до 5
 
 Правила для huginn_steps:
-- МАКСИМУМ 4 шага. Если целей больше — объедини связанные в один шаг
+- МАКСИМУМ 5 шагов. Если целей больше — объедини связанные в один шаг
 - check_question должен иметь ОДНОЗНАЧНЫЙ ответ
 - correct_answer — точный, проверяемый ответ
 - explanation — НЕ весь урок, а конкретное объяснение этой цели
@@ -483,18 +484,18 @@ export async function POST(req: Request) {
               messages: [
                 {
                   role: "user",
-                  content: `МАТЕРИАЛЫ:\n${compactFileText.slice(0, 4000)}\n\nСоздай ЛАКОНИЧНЫЙ план урока. Тема: "${topicOutline.name}". Класс: ${grade}, ${subject}.
+                  content: `МАТЕРИАЛЫ:\n${compactFileText.slice(0, 4000)}\n\nСократи план урока. Тема: "${topicOutline.name}". Класс: ${grade}, ${subject}.
 
 Цели: ${topicOutline.learning_goals.join("; ")}
 
 Верни ТОЛЬКО JSON:
 {
-  "theory": "теория МАКСИМУМ 150 слов с LaTeX",
+  "theory": "теория МАКСИМУМ 200 слов с LaTeX",
   "huginn_steps": [{"goal":"текст цели как выше","explanation":"...","check_question":"вопрос с числами","correct_answer":"...","hint":"..."}],
   "tasks": [{"question":"задача","answer":"...","steps":"решение","difficulty":1,"template":null,"params":null,"answer_formula":null}]
 }
 
-РОВНО 3 huginn_steps. РОВНО 3 задач. Theory — 150 слов максимум. Русский язык.`,
+Сократи: РОВНО 3 huginn_steps, РОВНО 5 tasks, theory 200 слов. Русский язык.`,
                 },
               ],
             },
