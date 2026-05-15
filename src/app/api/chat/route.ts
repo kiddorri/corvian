@@ -641,7 +641,7 @@ export async function POST(req: NextRequest) {
                           role: "assistant" as const,
                           content: cleanedResponse,
                         },
-                        { role: "user" as const, content: "продолжай" },
+                        { role: "user" as const, content: "Дай похожую задачу для закрепления." },
                       ];
 
                       const variationStream = anthropic.messages.stream(
