@@ -1,10 +1,18 @@
-// длина "<step_done/>" и "<task_done/>"
-const MARKER_MAX_LEN = 12;
+// длина "<step_done/>" / "<task_done/>" с запасом на пробелы и
+// искажённый регистр (модель может написать "<step_done />" или "< STEP_DONE / >")
+const MARKER_MAX_LEN = 20;
 
-const STEP_DONE_RE = /<step_done\/>/g;
-const TASK_DONE_RE = /<task_done\/>/g;
-const STEP_DONE_STR = "<step_done/>";
-const TASK_DONE_STR = "<task_done/>";
+// Толерантные регексы — ловят <step_done/>, <step_done />, <STEP_DONE/>,
+// <step-done/>, <  step_done  / >, любую комбинацию пробелов/регистра/дефиса.
+const STEP_DONE_REGEX = /<\s*step[_-]?done\s*\/?\s*>/gi;
+const TASK_DONE_REGEX = /<\s*task[_-]?done\s*\/?\s*>/gi;
+
+function stripMarkers(text: string): string {
+  return text
+    .replace(STEP_DONE_REGEX, "")
+    .replace(TASK_DONE_REGEX, "")
+    .trim();
+}
 
 export class StreamParser {
   private fullResponse = "";
@@ -23,7 +31,9 @@ export class StreamParser {
     if (safeEnd > 0) {
       const toSend = this.streamBuffer.slice(0, safeEnd);
       this.streamBuffer = this.streamBuffer.slice(safeEnd);
-      return toSend.replace(STEP_DONE_RE, "").replace(TASK_DONE_RE, "");
+      return toSend
+        .replace(STEP_DONE_REGEX, "")
+        .replace(TASK_DONE_REGEX, "");
     }
     return "";
   }
@@ -32,25 +42,26 @@ export class StreamParser {
   flush(): string {
     if (!this.streamBuffer) return "";
     const remaining = this.streamBuffer
-      .replace(STEP_DONE_RE, "")
-      .replace(TASK_DONE_RE, "");
+      .replace(STEP_DONE_REGEX, "")
+      .replace(TASK_DONE_REGEX, "");
     this.streamBuffer = "";
     return remaining;
   }
 
   /** Полный ответ модели с убранными маркерами и trim — для записи в БД. */
   getCleanedResponse(): string {
-    return this.fullResponse
-      .replace(STEP_DONE_RE, "")
-      .replace(TASK_DONE_RE, "")
-      .trim();
+    return stripMarkers(this.fullResponse);
   }
 
   hasStepDone(): boolean {
-    return this.fullResponse.includes(STEP_DONE_STR);
+    // Глобальные regex хранят lastIndex между .test() — обязательно сбрасываем,
+    // иначе второй вызов вернёт false.
+    STEP_DONE_REGEX.lastIndex = 0;
+    return STEP_DONE_REGEX.test(this.fullResponse);
   }
 
   hasTaskDone(): boolean {
-    return this.fullResponse.includes(TASK_DONE_STR);
+    TASK_DONE_REGEX.lastIndex = 0;
+    return TASK_DONE_REGEX.test(this.fullResponse);
   }
 }
