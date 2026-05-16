@@ -423,6 +423,7 @@ export async function POST(req: NextRequest) {
           // мог появиться независимо от внешнего [CRITICAL] (диагностика того,
           // почему [MARKER] лог не доходит до Vercel).
           console.log("[MARKER-CHECK] about to check markers");
+          console.log("[TEACH-RAW-TAIL]", JSON.stringify(parser.getRawTail(80)));
           try {
             hasStepDone = parser.hasStepDone();
             console.log("[MARKER-CHECK] hasStepDone returned:", hasStepDone);

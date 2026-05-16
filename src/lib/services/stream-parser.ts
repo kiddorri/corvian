@@ -53,6 +53,11 @@ export class StreamParser {
     return stripMarkers(this.fullResponse);
   }
 
+  /** Сырой хвост ответа (для диагностики маркеров). */
+  getRawTail(n = 80): string {
+    return this.fullResponse.slice(-n);
+  }
+
   hasStepDone(): boolean {
     // Глобальные regex хранят lastIndex между .test() — обязательно сбрасываем,
     // иначе второй вызов вернёт false.

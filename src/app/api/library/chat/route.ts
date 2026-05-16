@@ -372,8 +372,10 @@ export async function POST(req: NextRequest) {
           } = { advanced: false, finished: false, nextStepId: null };
 
           try {
+            console.log("[LIB-RAW-TAIL]", JSON.stringify(parser.getRawTail(80)));
             hasStepDone = parser.hasStepDone();
             hasTaskDone = parser.hasTaskDone();
+            console.log("[LIB-MARKER] hasStepDone:", hasStepDone, "hasTaskDone:", hasTaskDone);
 
             if (hasStepDone || hasTaskDone) {
               const isFirstRequest = !history || history.length === 0;
