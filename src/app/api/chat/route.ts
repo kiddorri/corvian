@@ -457,6 +457,17 @@ export async function POST(req: NextRequest) {
               sessionState?.current_step_id,
             );
 
+          // Rescue: math-валидатор подтвердил правильность, но модель забыла маркер.
+          if (serverValidatedCorrect && !hasStepDone && !hasTaskDone) {
+            if (raven === "huginn") {
+              hasStepDone = true;
+              console.log("[MARKER-RESCUE] forcing step_done — answer validated but marker missing");
+            } else if (raven === "muninn") {
+              hasTaskDone = true;
+              console.log("[MARKER-RESCUE] forcing task_done — answer validated but marker missing");
+            }
+          }
+
           if (hasStepDone || hasTaskDone) {
             console.log("[DEBUG] entering marker block");
             console.log("[GATE] marker detected, computing msgsOnStep");

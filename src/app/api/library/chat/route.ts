@@ -377,6 +377,19 @@ export async function POST(req: NextRequest) {
             hasTaskDone = parser.hasTaskDone();
             console.log("[LIB-MARKER] hasStepDone:", hasStepDone, "hasTaskDone:", hasTaskDone);
 
+            // Rescue: math-валидатор подтвердил правильность ответа,
+            // но модель забыла поставить маркер. Форсируем нужный маркер,
+            // чтобы ученик не застрял.
+            if (serverValidatedCorrect && !hasStepDone && !hasTaskDone) {
+              if (raven === "huginn") {
+                hasStepDone = true;
+                console.log("[LIB-MARKER-RESCUE] forcing step_done — answer validated but marker missing");
+              } else if (raven === "muninn") {
+                hasTaskDone = true;
+                console.log("[LIB-MARKER-RESCUE] forcing task_done — answer validated but marker missing");
+              }
+            }
+
             if (hasStepDone || hasTaskDone) {
               const isFirstRequest = !history || history.length === 0;
 
