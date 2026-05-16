@@ -176,15 +176,6 @@ function ChatContent({
       <main className="flex-1 overflow-hidden">
         <div ref={scrollRef} className="h-full overflow-y-auto">
           <div className="mx-auto max-w-3xl px-4 py-6 space-y-4">
-            {messages.length === 0 && !isStreaming && (
-              <div className="rounded-2xl border border-[rgba(139,92,246,0.15)] bg-[#18181B] p-5 text-center">
-                <div className="text-sm text-[#A1A1AA]">
-                  Напиши <span className="text-[#F4F4F5]">«начнём»</span> или поздоровайся,
-                  чтобы {ravenLabel.toLowerCase()} начал урок.
-                </div>
-              </div>
-            )}
-
             {messages.map((m, i) => (
               <MessageBubble key={i} message={m} ravenLabel={ravenLabel} ravenColor={ravenColor} />
             ))}
@@ -198,7 +189,7 @@ function ChatContent({
               />
             )}
 
-            {isStreaming && !streamingText && (
+            {(isStreaming || messages.length === 0) && !streamingText && (
               <div className="flex justify-start">
                 <div className="rounded-2xl bg-[rgba(255,255,255,0.05)] px-4 py-3">
                   <div className="flex gap-1">

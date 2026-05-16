@@ -36,10 +36,11 @@ type LibrarySubjectRow = {
 
 export async function POST(req: NextRequest) {
   try {
-    const { sessionId, message, raven, topicId, libraryStudentId } = await req.json();
+    const { sessionId, message, raven, topicId, libraryStudentId, autoStart } = await req.json();
     if (!sessionId || !message || !raven || !topicId || !libraryStudentId) {
       return Response.json({ error: "Не хватает обязательных полей" }, { status: 400 });
     }
+    const isAutoStart = autoStart === true;
 
     const supabase = getSupabase();
 
@@ -304,17 +305,31 @@ export async function POST(req: NextRequest) {
       serverValidatedCorrect,
     });
 
-    await supabase
-      .from("library_chat_messages")
-      .insert({ session_id: sessionId, role: "user", content: message });
+    if (!isAutoStart) {
+      await supabase
+        .from("library_chat_messages")
+        .insert({ session_id: sessionId, role: "user", content: message });
+    }
+
+    let claudeHistory = ((history ?? []) as { role: string; content: string }[])
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      }));
+
+    // Если в БД первое user-сообщение не сохранено (автостарт случался ранее),
+    // история начинается с assistant — Claude API такого не допускает.
+    // Подкладываем виртуальное "Начни урок." только для API-вызова.
+    if (claudeHistory.length > 0 && claudeHistory[0].role === "assistant") {
+      claudeHistory = [
+        { role: "user" as const, content: "Начни урок." },
+        ...claudeHistory,
+      ];
+    }
 
     const messages = [
-      ...((history ?? []) as { role: string; content: string }[])
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        })),
+      ...claudeHistory,
       { role: "user" as const, content: message },
     ];
 
@@ -421,8 +436,8 @@ export async function POST(req: NextRequest) {
                 sessionState?.current_step_type === "task" || raven === "muninn";
 
               if (!isFirstRequest) {
-                if (hasTaskDone && isTaskContext && userMsgsSinceAdvance < 2) {
-                  // подавляем
+                if (hasTaskDone && isTaskContext && userMsgsSinceAdvance < 1) {
+                  // подавляем: task_done пришёл без единого ответа ученика
                 } else if (hasTaskDone && isTaskContext) {
                   if (activeVariation) {
                     await supabase
