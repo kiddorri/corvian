@@ -28,9 +28,11 @@ export function useLibraryChat(libraryStudentId: string, libraryTopicId: string)
   const [streamingText, setStreamingText] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const streamingRef = useRef<string>("");
+  const autoStartedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    autoStartedRef.current = false;
     (async () => {
       try {
         const sessionRes = await fetch("/api/library/chat/session", {
@@ -68,16 +70,18 @@ export function useLibraryChat(libraryStudentId: string, libraryTopicId: string)
   }, [libraryStudentId, libraryTopicId]);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, opts: { autoStart?: boolean } = {}) => {
       if (state.kind !== "active" || isStreaming) return;
       const { session } = state;
 
-      const userMsg: LibraryMessage = { role: "user", content: text };
-      setState({
-        kind: "active",
-        session,
-        messages: [...state.messages, userMsg],
-      });
+      if (!opts.autoStart) {
+        const userMsg: LibraryMessage = { role: "user", content: text };
+        setState({
+          kind: "active",
+          session,
+          messages: [...state.messages, userMsg],
+        });
+      }
       setIsStreaming(true);
       setStreamingText("");
       streamingRef.current = "";
@@ -92,6 +96,7 @@ export function useLibraryChat(libraryStudentId: string, libraryTopicId: string)
             raven: session.raven,
             topicId: libraryTopicId,
             libraryStudentId,
+            autoStart: opts.autoStart === true,
           }),
         });
 
@@ -198,6 +203,7 @@ export function useLibraryChat(libraryStudentId: string, libraryTopicId: string)
                 const transData = await transRes.json();
                 if (!transRes.ok) throw new Error(transData.error ?? "Ошибка перехода");
                 const newSession: LibrarySessionInfo = transData.session;
+                autoStartedRef.current = false;
                 setState({ kind: "active", session: newSession, messages: [] });
               } catch (err) {
                 setState({
@@ -268,6 +274,19 @@ export function useLibraryChat(libraryStudentId: string, libraryTopicId: string)
     },
     [state, isStreaming, libraryStudentId, libraryTopicId],
   );
+
+  // Автостарт: новая сессия (история пуста) — ворон сам отправляет первое сообщение.
+  useEffect(() => {
+    if (
+      state.kind === "active" &&
+      state.messages.length === 0 &&
+      !isStreaming &&
+      !autoStartedRef.current
+    ) {
+      autoStartedRef.current = true;
+      void sendMessage("Начни урок.", { autoStart: true });
+    }
+  }, [state, isStreaming, sendMessage]);
 
   return { state, streamingText, isStreaming, sendMessage };
 }
