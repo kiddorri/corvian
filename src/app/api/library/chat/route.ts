@@ -372,8 +372,10 @@ export async function POST(req: NextRequest) {
           } = { advanced: false, finished: false, nextStepId: null };
 
           try {
+            console.log("[LIB-RAW-TAIL]", JSON.stringify(parser.getRawTail(80)));
             hasStepDone = parser.hasStepDone();
             hasTaskDone = parser.hasTaskDone();
+            console.log("[LIB-MARKER] hasStepDone:", hasStepDone, "hasTaskDone:", hasTaskDone);
 
             if (hasStepDone || hasTaskDone) {
               const isFirstRequest = !history || history.length === 0;
@@ -424,7 +426,27 @@ export async function POST(req: NextRequest) {
                       sessionState as LibrarySessionState | null,
                     );
                   } else if (currentTaskData && topic) {
-                    try {
+                    // Защита: если модель в основном ответе уже сама дала новую задачу
+                    // (есть вопросительный знак + длинное содержание после короткого подтверждения),
+                    // вариация не нужна — просто advance и пусть ученик отвечает на эту задачу.
+                    const hasQuestionMark = cleanedResponse.includes("?");
+                    const responseTooLong = cleanedResponse.length > 80;
+                    const modelAlreadyGaveNewTask = hasQuestionMark && responseTooLong;
+
+                    if (modelAlreadyGaveNewTask) {
+                      console.log(
+                        "[VARIATION-SKIP] model already gave new question in main response, advancing without variation. response length:",
+                        cleanedResponse.length,
+                      );
+                      stepResult = await advanceLibraryStep(
+                        supabase,
+                        sessionId,
+                        topicId,
+                        raven,
+                        sessionState as LibrarySessionState | null,
+                      );
+                    } else {
+                      try {
                       const variation = await generateTaskVariation(
                         currentTaskData.question,
                         currentTaskData.answer,
@@ -524,6 +546,7 @@ export async function POST(req: NextRequest) {
                       }
                     } catch (streamErr) {
                       console.error("Library variation stream failed:", streamErr);
+                    }
                     }
                   } else {
                     stepResult = await advanceLibraryStep(

@@ -423,6 +423,7 @@ export async function POST(req: NextRequest) {
           // мог появиться независимо от внешнего [CRITICAL] (диагностика того,
           // почему [MARKER] лог не доходит до Vercel).
           console.log("[MARKER-CHECK] about to check markers");
+          console.log("[TEACH-RAW-TAIL]", JSON.stringify(parser.getRawTail(80)));
           try {
             hasStepDone = parser.hasStepDone();
             console.log("[MARKER-CHECK] hasStepDone returned:", hasStepDone);
@@ -581,6 +582,26 @@ export async function POST(req: NextRequest) {
                     JSON.stringify(stepResult),
                   );
                 } else if (currentTaskData && topic) {
+                  // Защита: если модель в основном ответе уже сама дала новую задачу
+                  // (есть вопросительный знак + длинное содержание после короткого подтверждения),
+                  // вариация не нужна — просто advance и пусть ученик отвечает на эту задачу.
+                  const hasQuestionMark = cleanedResponse.includes("?");
+                  const responseTooLong = cleanedResponse.length > 80;
+                  const modelAlreadyGaveNewTask = hasQuestionMark && responseTooLong;
+
+                  if (modelAlreadyGaveNewTask) {
+                    console.log(
+                      "[VARIATION-SKIP] model already gave new question in main response, advancing without variation. response length:",
+                      cleanedResponse.length,
+                    );
+                    stepResult = await advanceStep(
+                      supabase,
+                      sessionId,
+                      topicId,
+                      raven,
+                      sessionState as SessionState | null,
+                    );
+                  } else {
                   // Оригинальная задача решена — генерируем вариацию через Sonnet
                   try {
                     console.log(
@@ -738,6 +759,7 @@ export async function POST(req: NextRequest) {
                       "[ADVANCE] result:",
                       JSON.stringify(stepResult),
                     );
+                  }
                   }
                 } else {
                   // Нет данных задачи — fallback: advance
